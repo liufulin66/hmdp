@@ -12,7 +12,9 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.RedisException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -39,6 +41,8 @@ class ShopServiceImplTest {
     private ValueOperations<String, String> values;
     private ShopServiceImpl service;
     private Shop shop;
+    private RedissonClient redisson;
+    private RLock lock;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -47,7 +51,10 @@ class ShopServiceImplTest {
         values = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
         service = spy(new ShopServiceImpl());
-        ReflectionTestUtils.setField(service, "cacheClient", new CacheClient(redis));
+        redisson = mock(RedissonClient.class);
+        lock = mock(RLock.class);
+        when(redisson.getLock(anyString())).thenReturn(lock);
+        ReflectionTestUtils.setField(service, "cacheClient", new CacheClient(redis, redisson));
         shop = new Shop().setId(1L).setName("测试商户");
     }
 
@@ -89,10 +96,10 @@ class ShopServiceImplTest {
         assertTrue(ttl.getValue() >= TimeUnit.MINUTES.toMillis(CACHE_SHOP_TTL));
         assertTrue(ttl.getValue() <= TimeUnit.MINUTES.toMillis(CACHE_SHOP_TTL)
                 + TimeUnit.SECONDS.toMillis(CACHE_SHOP_JITTER_SECONDS));
-        var owner = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(values).setIfAbsent(eq(LOCK_SHOP_KEY + 1), owner.capture(),
-                eq(TimeUnit.SECONDS.toMillis(LOCK_SHOP_TTL)), eq(TimeUnit.MILLISECONDS));
-        verify(redis).execute(any(RedisScript.class), eq(List.of(LOCK_SHOP_KEY + 1)), eq(owner.getValue()));
+        verify(redisson).getLock(LOCK_SHOP_KEY + 1);
+        verify(lock).tryLock();
+        verify(lock).unlock();
+        verifyNoMoreInteractions(lock);
     }
 
     @Test
@@ -109,24 +116,24 @@ class ShopServiceImplTest {
         when(values.get(CACHE_SHOP_KEY + 1)).thenReturn(null, JSONUtil.toJsonStr(shop));
         assertTrue(service.queryShopById(1L).getSuccess());
         verify(service, never()).getById(any());
-        verify(redis).execute(any(RedisScript.class), eq(List.of(LOCK_SHOP_KEY + 1)), anyString());
+        verify(lock).unlock();
     }
 
     @Test
     void waitingRequestUsesCacheFilledByAnotherRequest() {
         when(values.get(CACHE_SHOP_KEY + 1)).thenReturn(null, JSONUtil.toJsonStr(shop));
-        when(values.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        when(lock.tryLock()).thenReturn(false);
         assertTrue(service.queryShopById(1L).getSuccess());
         verify(service, never()).getById(any());
-        verify(redis, never()).execute(any(RedisScript.class), anyList(), anyString());
+        verify(lock, never()).unlock();
     }
 
     @Test
     void lockContentionHasBoundedRetriesAndDoesNotLoadDatabase() {
-        when(values.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+        when(lock.tryLock()).thenReturn(false);
         assertThrows(CacheBusyException.class, () -> service.queryShopById(1L));
-        verify(values, times(SHOP_LOCK_MAX_ATTEMPTS)).setIfAbsent(
-                anyString(), anyString(), anyLong(), any(TimeUnit.class));
+        verify(lock, times(SHOP_LOCK_MAX_ATTEMPTS)).tryLock();
+        verify(lock, never()).unlock();
         verify(service, never()).getById(any());
     }
 
@@ -139,11 +146,32 @@ class ShopServiceImplTest {
     }
 
     @Test
+    void redissonFailureFallsBackOnceWithoutCachingOrUnlocking() {
+        when(lock.tryLock()).thenThrow(new RedisException("lock service unavailable"));
+        doReturn(shop).when(service).getById(1L);
+        assertSame(shop, service.queryShopById(1L).getData());
+        verify(service).getById(1L);
+        verify(values, never()).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+        verify(lock, never()).unlock();
+    }
+
+    @Test
+    void lostOwnershipDoesNotDiscardResultOrMaskDatabaseException() {
+        acquireLock();
+        doThrow(new IllegalMonitorStateException("ownership lost")).when(lock).unlock();
+        IllegalStateException failure = new IllegalStateException("database unavailable");
+        doThrow(failure).doReturn(shop).when(service).getById(1L);
+        assertSame(failure, assertThrows(IllegalStateException.class, () -> service.queryShopById(1L)));
+        assertSame(shop, service.queryShopById(1L).getData());
+        verify(service, times(2)).getById(1L);
+    }
+
+    @Test
     void cacheWriteAndUnlockFailuresDoNotDiscardDatabaseResult() {
         acquireLock();
         doReturn(shop).when(service).getById(1L);
         doThrow(redisFailure()).when(values).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
-        when(redis.execute(any(RedisScript.class), anyList(), anyString())).thenThrow(redisFailure());
+        doThrow(new RedisException("unlock unavailable")).when(lock).unlock();
         assertSame(shop, service.queryShopById(1L).getData());
     }
 
@@ -153,7 +181,7 @@ class ShopServiceImplTest {
         doThrow(new IllegalStateException("database unavailable")).doReturn(shop).when(service).getById(1L);
         assertThrows(IllegalStateException.class, () -> service.queryShopById(1L));
         assertTrue(service.queryShopById(1L).getSuccess());
-        verify(redis, times(2)).execute(any(RedisScript.class), anyList(), anyString());
+        verify(lock, times(2)).unlock();
     }
 
     @Test
@@ -245,7 +273,7 @@ class ShopServiceImplTest {
     }
 
     private void acquireLock() {
-        when(values.setIfAbsent(anyString(), anyString(), anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(true);
+        when(lock.tryLock()).thenReturn(true);
     }
 
     private DataAccessResourceFailureException redisFailure() {

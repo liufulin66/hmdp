@@ -4,9 +4,11 @@ import cn.hutool.core.convert.Convert;
 import cn.hutool.core.lang.TypeReference;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.RedisException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -14,7 +16,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.lang.reflect.Type;
 import java.util.Collections;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
@@ -31,15 +32,13 @@ import java.util.function.Supplier;
 @Slf4j
 @Component
 public class CacheClient {
-    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then "
-                    + "return redis.call('del', KEYS[1]) else return 0 end", Long.class);
-
     private final StringRedisTemplate redis;
+    private final RedissonClient redisson;
     private final ConcurrentMap<String, LoadLimiter> loadLimiters = new ConcurrentHashMap<>();
 
-    public CacheClient(StringRedisTemplate redis) {
+    public CacheClient(StringRedisTemplate redis, RedissonClient redisson) {
         this.redis = Objects.requireNonNull(redis, "redis");
+        this.redisson = Objects.requireNonNull(redisson, "redisson");
     }
 
     /** 简单主键入口；ID 可以是 Long、Integer、String、UUID 等，前缀由业务隔离。 */
@@ -92,18 +91,19 @@ public class CacheClient {
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(shortLived, "shortLived");
         LoadLimiter limiter = limiter(policy);
-        String owner = UUID.randomUUID().toString();
 
         for (int attempt = 0; attempt < policy.maxAttempts(); attempt++) {
             boolean locked;
+            RLock lock;
             try {
                 CacheRead<R> cached = readCache(cacheKey, type);
                 if (cached.hit()) {
                     return cached.value();
                 }
-                locked = Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(
-                        lockKey, owner, policy.lockTtl().toMillis(), TimeUnit.MILLISECONDS));
-            } catch (DataAccessException e) {
+                lock = redisson.getLock(lockKey);
+                // 不指定 leaseTime：由看门狗续期；竞争等待仍由现有有限重试控制。
+                locked = lock.tryLock();
+            } catch (DataAccessException | RedisException e) {
                 log.warn("缓存不可用，限流回源，key={}", cacheKey, e);
                 return load(cacheKey, loader, policy, shortLived, limiter, false);
             }
@@ -121,7 +121,7 @@ public class CacheClient {
                     }
                     return load(cacheKey, loader, policy, shortLived, limiter, true);
                 } finally {
-                    unlock(lockKey, owner);
+                    unlock(lock);
                 }
             }
             if (attempt + 1 < policy.maxAttempts() && !pause(policy)) {
@@ -193,11 +193,12 @@ public class CacheClient {
         return limiter;
     }
 
-    private void unlock(String key, String owner) {
+    private void unlock(RLock lock) {
         try {
-            redis.execute(UNLOCK_SCRIPT, Collections.singletonList(key), owner);
-        } catch (DataAccessException e) {
-            log.warn("释放缓存重建锁失败，等待租期结束，key={}", key, e);
+            // Redisson 原子校验客户端和线程的所有权；不能用 forceUnlock 删除他人的锁。
+            lock.unlock();
+        } catch (RedisException | IllegalMonitorStateException e) {
+            log.warn("释放缓存重建锁失败或所有权已丢失，key={}", lock.getName(), e);
         }
     }
 

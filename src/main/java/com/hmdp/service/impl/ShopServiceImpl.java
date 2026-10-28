@@ -29,7 +29,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     private static final CachePolicy SHOP_CACHE_POLICY = new CachePolicy(
             "shop-detail", Duration.ofMinutes(CACHE_SHOP_TTL), Duration.ofMinutes(CACHE_NULL_TTL),
-            Duration.ofSeconds(CACHE_SHOP_JITTER_SECONDS), Duration.ofSeconds(LOCK_SHOP_TTL),
+            Duration.ofSeconds(CACHE_SHOP_JITTER_SECONDS),
             SHOP_LOCK_MAX_ATTEMPTS, Duration.ofMillis(SHOP_RETRY_DELAY_MILLIS),
             SHOP_MAX_CONCURRENT_LOADS, SHOP_CACHE_DELETE_MAX_ATTEMPTS);
 

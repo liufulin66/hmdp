@@ -11,7 +11,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -35,6 +36,8 @@ class CacheClientTest {
     private Map<String, String> stored;
     private CacheClient client;
     private CachePolicy policy;
+    private RedissonClient redisson;
+    private Map<String, RLock> locks;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -44,18 +47,19 @@ class CacheClientTest {
         stored = new ConcurrentHashMap<>();
         when(redis.opsForValue()).thenReturn(values);
         when(values.get(anyString())).thenAnswer(call -> stored.get(call.getArgument(0)));
-        when(values.setIfAbsent(anyString(), anyString(), anyLong(), eq(TimeUnit.MILLISECONDS)))
-                .thenAnswer(call -> stored.putIfAbsent(call.getArgument(0), call.getArgument(1)) == null);
         doAnswer(call -> {
             stored.put(call.getArgument(0), call.getArgument(1));
             return null;
         }).when(values).set(anyString(), anyString(), anyLong(), eq(TimeUnit.MILLISECONDS));
         when(redis.delete(anyString())).thenAnswer(call -> stored.remove(call.getArgument(0)) != null);
-        when(redis.execute(any(RedisScript.class), anyList(), anyString())).thenAnswer(call -> {
-            List<String> keys = call.getArgument(1);
-            return stored.remove(keys.get(0), call.getArgument(2)) ? 1L : 0L;
-        });
-        client = new CacheClient(redis);
+        redisson = mock(RedissonClient.class);
+        locks = new ConcurrentHashMap<>();
+        when(redisson.getLock(anyString())).thenAnswer(call -> locks.computeIfAbsent(call.getArgument(0), key -> {
+            RLock lock = mock(RLock.class);
+            when(lock.tryLock()).thenReturn(true);
+            return lock;
+        }));
+        client = new CacheClient(redis, redisson);
         policy = policy("test", 1);
     }
 
@@ -191,7 +195,7 @@ class CacheClientTest {
                 }, policy)));
         assertEquals(1, calls.get());
         assertFalse(stored.containsKey("db"));
-        assertFalse(stored.containsKey("lock:db"));
+        verify(locks.get("lock:db")).unlock();
         assertEquals(shop(), client.queryWithMutex("db", "lock:db", Shop.class, CacheClientTest::shop, policy));
     }
 
@@ -237,13 +241,14 @@ class CacheClientTest {
 
     @Test
     void interruptedLockWaitPreservesInterruptFlagAndDoesNotReportNotFound() {
-        stored.put("lock:busy", "another-owner");
+        RLock busyLock = redisson.getLock("lock:busy");
+        when(busyLock.tryLock()).thenReturn(false);
         Thread.currentThread().interrupt();
         try {
             assertThrows(CacheBusyException.class, () -> client.queryWithMutex("busy", "lock:busy",
                     Shop.class, () -> fail("未拿到锁不能回源"), policy));
             assertTrue(Thread.currentThread().isInterrupted());
-            assertEquals("another-owner", stored.get("lock:busy"));
+            verify(busyLock, never()).unlock();
         } finally {
             Thread.interrupted();
         }
@@ -259,9 +264,9 @@ class CacheClientTest {
     @Test
     void rejectsInvalidPoliciesAndConflictingKeysBeforeLoading() {
         assertThrows(IllegalArgumentException.class, () -> new CachePolicy("test", Duration.ZERO,
-                policy.emptyTtl(), policy.jitter(), policy.lockTtl(), 1, Duration.ZERO, 1, 1));
+                policy.emptyTtl(), policy.jitter(), 1, Duration.ZERO, 1, 1));
         assertThrows(IllegalArgumentException.class, () -> new CachePolicy("test", policy.ttl(),
-                policy.emptyTtl(), Duration.ofSeconds(-1), policy.lockTtl(), 1, Duration.ZERO, 1, 1));
+                policy.emptyTtl(), Duration.ofSeconds(-1), 1, Duration.ZERO, 1, 1));
         assertThrows(IllegalArgumentException.class, () -> client.queryWithMutex("same", "same", Shop.class,
                 () -> fail("无效参数不能回源"), policy));
         verifyNoInteractions(redis);
@@ -300,7 +305,7 @@ class CacheClientTest {
 
     private static CachePolicy policy(String group, int concurrency) {
         return new CachePolicy(group, Duration.ofMinutes(30), Duration.ofMinutes(2), Duration.ZERO,
-                Duration.ofSeconds(10), 3, Duration.ZERO, concurrency, 3);
+                3, Duration.ZERO, concurrency, 3);
     }
 
     private record Search(String city, int typeId, int page) { }

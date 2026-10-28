@@ -10,14 +10,13 @@ import java.util.Objects;
  * @param ttl 正常结果有效期
  * @param emptyTtl null 或业务指定的空结果有效期
  * @param jitter 正常结果有效期的最大随机增量
- * @param lockTtl 重建锁租期（不自动续期）
  * @param maxAttempts 获取缓存/锁的最大轮数，包含首次尝试
  * @param retryDelay 锁竞争和删除重试的间隔
  * @param maxConcurrentLoads 同一 loadGroup 在单实例内的最大回源并发
  * @param deleteAttempts 删除缓存的最大尝试次数，包含首次尝试
  */
 public record CachePolicy(String loadGroup, Duration ttl, Duration emptyTtl, Duration jitter,
-                          Duration lockTtl, int maxAttempts, Duration retryDelay,
+                          int maxAttempts, Duration retryDelay,
                           int maxConcurrentLoads, int deleteAttempts) {
     public CachePolicy {
         if (loadGroup == null || loadGroup.isBlank()) {
@@ -25,7 +24,6 @@ public record CachePolicy(String loadGroup, Duration ttl, Duration emptyTtl, Dur
         }
         requirePositiveMillis(ttl, "ttl");
         requirePositiveMillis(emptyTtl, "emptyTtl");
-        requirePositiveMillis(lockTtl, "lockTtl");
         requireNonNegativeMillis(jitter, "jitter");
         requireNonNegativeMillis(retryDelay, "retryDelay");
         // 防止写入 TTL、生成随机上界时发生溢出。

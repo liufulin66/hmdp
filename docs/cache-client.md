@@ -1,6 +1,6 @@
 # 通用缓存组件的使用
 
-`CacheClient` 是 Spring 组件，复用现有 `StringRedisTemplate` 和 Hutool，无需新增依赖。
+`CacheClient` 是 Spring 组件，使用 `StringRedisTemplate` 和 Hutool 读写缓存，使用 Redisson 4.8.0 的 `RLock` 保护缓存重建。
 业务层负责参数校验、数据库查询和 `Result` 包装；组件负责空值缓存、互斥重建、随机过期、限流回源和缓存失效。
 
 ## 配置业务策略
@@ -11,7 +11,6 @@ private static final CachePolicy POLICY = new CachePolicy(
         Duration.ofMinutes(30),      // 正常结果 TTL
         Duration.ofMinutes(2),       // 不存在或指定空结果的 TTL
         Duration.ofMinutes(5),       // 正常 TTL 增加 0～5 分钟随机量
-        Duration.ofSeconds(10),      // 锁租期
         10,                          // 查询缓存/尝试加锁的轮数，包含首次
         Duration.ofMillis(50),       // 锁竞争、删除失败时的重试间隔
         20,                          // 单实例、同一分组的回源并发上限
@@ -20,7 +19,7 @@ private static final CachePolicy POLICY = new CachePolicy(
 ```
 
 `Duration` 明确时间单位；组件统一按毫秒调用 Redis，支持毫秒级配置。
-TTL、锁租期至少为 1 毫秒；随机增量、重试间隔允许为零。
+TTL 至少为 1 毫秒；随机增量、重试间隔允许为零。
 
 `loadGroup` 必须是业务名称，不能随 ID、分页参数变化。同名分组共享并发额度，不同分组相互隔离。
 同名分组配置不同并发上限会抛出配置异常，避免额度取决于首次请求。
@@ -112,5 +111,31 @@ public Result updateShop(Shop shop) {
 - 缓存写入失败：记录日志，返回已经成功取得的回源结果。
 - 缓存无法还原：按未命中处理，由拿到锁的请求重新加载。
 
-重建锁不自动续期；超过租期可能发生重复回源。并发上限是每实例、每业务分组的额度。
+重建锁使用看门狗自动续期，但长时间 GC、网络故障、Redis 故障切换仍可能造成锁丢失和重复回源。
+并发上限是每实例、每业务分组的额度。
 先提交数据库再删除缓存仍然允许并发旧值回填的窗口，组件不提供强一致性保证。
+
+## Redisson 锁与连接配置
+
+`RedissonConfig` 创建独立的 Redisson 客户端，复用 Lettuce 已解析的单机 Redis 地址、数据库、
+用户名、密码、TLS 开关和超时；现有 `spring.data.redis.*` 配置及本地密钥配置继续生效。
+当前接入针对项目的单机部署，不支持哨兵/集群或定制 TLS 证书配置。
+使用核心依赖 `redisson`，避免引入另一套 Spring Data Redis 自动配置。Spring 关闭时自动 shutdown。
+采用延迟连接初始化，缓存读写故障时仍保留原来的限流回源路径。
+
+调用 `lock.tryLock()`，不传固定 `leaseTime`，由看门狗按 30 秒超时自动续期；
+正常查询结束在 `finally` 中 `unlock()`，进程退出不能继续续期时锁会过期。
+Redisson 在 Redis 中保存客户端和线程的所有权及重入次数，并用 Lua 原子校验和修改；
+解锁失败或所有权已丢失只记录日志，不覆盖成功的数据库结果或原始数据库异常。
+不能用 `forceUnlock()` 绕过所有权校验。
+
+没有拿到锁时仍按业务策略复查缓存：商户最多尝试 10 次，间隔 50 毫秒；
+这只是竞争重试上限，不含 Redis 网络超时，也不是整个请求的硬超时。
+Redisson 只管理锁，不替代空值缓存、随机 TTL、每实例 20 个并发回源额度或秒杀业务的 Lua/数据库约束。
+
+部署时先停止所有旧版本实例，等待旧锁的 10 秒租期结束，再启动新版本。
+旧锁是 String，新锁是 Hash，不能在相同锁 key 上混跑新旧实现；不要通过批量删除锁绕过迁移。
+无需建表或修改已有业务数据。
+
+`CacheLockIntegrationTest` 使用两个独立客户端和随机测试 key，验证竞争、慢回源跨租期续期、
+缓存共享以及释放后重新获取；通过 `-Dhmdp.integration=true` 显式启用真实 Redis 测试。

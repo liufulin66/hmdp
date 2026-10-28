@@ -15,7 +15,6 @@ public class RedisConstants {
     public static final Long CACHE_SHOP_TYPE_TTL = 30L;
 
     public static final String LOCK_SHOP_KEY = "lock:shop:";
-    public static final Long LOCK_SHOP_TTL = 10L;
 
     // 商户缓存：正常数据在原有 30 分钟上增加最多 5 分钟抖动。
     public static final long CACHE_SHOP_JITTER_SECONDS = 300L;
