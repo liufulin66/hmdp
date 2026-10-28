@@ -28,6 +28,8 @@ public class RedisConstants {
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
     public static final String SECKILL_ORDER_KEY = "seckill:order:";
     public static final String SECKILL_META_KEY = "seckill:meta:";
+    public static final String SECKILL_RESULT_KEY = "seckill:result:";
+    public static final String SECKILL_RESERVATION_KEY = "seckill:reservation:";
     public static final String SECKILL_STREAM_KEY = "stream.orders";
     public static final String SECKILL_DEAD_LETTER_KEY = "stream.orders.dead";
     public static final String SECKILL_CONSUMER_GROUP = "g1";

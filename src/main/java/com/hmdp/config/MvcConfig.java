@@ -1,18 +1,24 @@
 package com.hmdp.config;
 
 import com.hmdp.interceptor.LoginInterceptor;
+import com.hmdp.interceptor.AdminInterceptor;
 import com.hmdp.interceptor.RefreshTokenInterceptor;
 import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
+@EnableConfigurationProperties(AdminProperties.class)
 public class MvcConfig implements WebMvcConfigurer {
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private AdminProperties adminProperties;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
@@ -33,5 +39,10 @@ public class MvcConfig implements WebMvcConfigurer {
                         "/error"
                 )
                 .order(1);
+
+        // /shop/** 和 /voucher/** 的公开查询与管理写入按 HTTP 方法区分。
+        registry.addInterceptor(new AdminInterceptor(adminProperties))
+                .addPathPatterns("/shop", "/shop/**", "/voucher", "/voucher/**")
+                .order(2);
     }
 }

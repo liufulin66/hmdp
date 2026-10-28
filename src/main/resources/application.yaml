@@ -30,6 +30,9 @@ logging:
   level:
     com.hmdp: debug
 hmdp:
+  admin:
+    # 配置已存在用户的 ID，例如环境变量 HMDP_ADMIN_USER_IDS=1,2；默认禁止管理写入。
+    user-ids: ${HMDP_ADMIN_USER_IDS:}
   id-generator:
     # 默认 1/1 仅供本机单实例使用，多实例须配置不同的编号组合（各为 0～31）。
     worker-id: ${HMDP_ID_WORKER_ID:1}

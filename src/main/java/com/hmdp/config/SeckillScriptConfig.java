@@ -18,4 +18,12 @@ public class SeckillScriptConfig {
         script.setResultType(Long.class);
         return script;
     }
+
+    @Bean
+    public DefaultRedisScript<Long> compensateSeckillScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("compensate-seckill.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 }

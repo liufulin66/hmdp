@@ -26,6 +26,8 @@ import static com.hmdp.utils.RedisConstants.SECKILL_META_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_STOCK_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_STREAM_KEY;
+import static com.hmdp.utils.RedisConstants.SECKILL_RESULT_KEY;
+import static com.hmdp.utils.RedisConstants.SECKILL_RESERVATION_KEY;
 
 /**
  * <p>
@@ -71,7 +73,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     SECKILL_STOCK_KEY + voucherId,
                     SECKILL_ORDER_KEY + voucherId,
                     SECKILL_META_KEY + voucherId,
-                    SECKILL_STREAM_KEY);
+                    SECKILL_STREAM_KEY,
+                    SECKILL_RESULT_KEY + orderId,
+                    SECKILL_RESERVATION_KEY + voucherId);
             Long result = stringRedisTemplate.execute(seckillScript, keys,
                     voucherId.toString(),
                     user.getId().toString(),

@@ -7,9 +7,11 @@ import jakarta.annotation.Resource;
 
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.hmdp.service.IVoucherOrderService;
+import com.hmdp.service.impl.VoucherOrderResultService;
 
 /**
  * <p>
@@ -25,6 +27,14 @@ public class VoucherOrderController {
 
     @Resource
     private IVoucherOrderService voucherOrderService;
+
+    @Resource
+    private VoucherOrderResultService resultService;
+
+    @GetMapping("/{id}/result")
+    public Result queryResult(@PathVariable("id") Long orderId) {
+        return resultService.queryResult(orderId);
+    }
 
     @PostMapping("seckill/{id}")
     public Result seckillVoucher(@PathVariable("id") Long voucherId) {

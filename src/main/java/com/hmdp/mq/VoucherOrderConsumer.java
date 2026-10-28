@@ -1,9 +1,10 @@
 package com.hmdp.mq;
 
 import com.hmdp.service.impl.VoucherOrderPersistenceService;
+import com.hmdp.service.impl.VoucherOrderCompensationService;
+import com.hmdp.entity.VoucherOrderTask;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.SmartLifecycle;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
@@ -17,7 +18,6 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -31,26 +31,27 @@ import static com.hmdp.utils.RedisConstants.SECKILL_STREAM_KEY;
  * 秒杀订单消费者：从 Redis Stream 读取订单消息，交给事务方法落库，成功后 ACK。
  *
  * <p>失败消息不 ACK，会留在 pending 列表；消费者每 30 秒重试一次，
- * 超过重试次数后转入死信 Stream，避免永久阻塞。</p>
+ * 数据库记录重试次数；确认失败后先补偿，再转入死信并 ACK。</p>
  */
 @Slf4j
 @Component
 public class VoucherOrderConsumer implements SmartLifecycle {
 
-    private static final int MAX_RETRIES = 3;
     private static final long PENDING_CHECK_INTERVAL_MILLIS = 30_000L;
 
     private final StringRedisTemplate stringRedisTemplate;
     private final VoucherOrderPersistenceService persistenceService;
+    private final VoucherOrderCompensationService compensationService;
     private final StreamOperations<String, String, String> streamOps;
     private final ExecutorService executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ConcurrentHashMap<String, Integer> attempts = new ConcurrentHashMap<>();
 
     public VoucherOrderConsumer(StringRedisTemplate stringRedisTemplate,
-                                VoucherOrderPersistenceService persistenceService) {
+                                VoucherOrderPersistenceService persistenceService,
+                                VoucherOrderCompensationService compensationService) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.persistenceService = persistenceService;
+        this.compensationService = compensationService;
         this.streamOps = stringRedisTemplate.opsForStream();
         this.executor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "seckill-order-consumer");
@@ -176,24 +177,27 @@ public class VoucherOrderConsumer implements SmartLifecycle {
             return;
         }
         try {
-            persistenceService.persistVoucherOrder(orderId, userId, voucherId);
-        } catch (DuplicateKeyException e) {
-            // 订单已存在，说明消息被重复投递；唯一索引保证了幂等
-            log.warn("秒杀订单已存在，按幂等处理，recordId={}", recordId);
-            acknowledge(recordId);
-            attempts.remove(recordId);
-            return;
-        } catch (Exception e) {
-            int count = attempts.merge(recordId, 1, Integer::sum);
-            log.error("创建秒杀订单失败，recordId={}，第 {} 次", recordId, count, e);
-            if (count >= MAX_RETRIES && deadLetter(record)) {
-                acknowledge(recordId);
-                attempts.remove(recordId);
+            VoucherOrderTask task;
+            try {
+                task = persistenceService.persistVoucherOrder(orderId, userId, voucherId);
+            } catch (Exception e) {
+                log.warn("秒杀订单落库失败，核对数据库状态，recordId={}", recordId, e);
+                task = persistenceService.recordFailure(orderId, userId, voucherId);
             }
-            return;
+            if (VoucherOrderTask.PROCESSING.equals(task.getStatus())) return;
+            if (VoucherOrderTask.COMPENSATING.equals(task.getStatus())) {
+                compensationService.compensate(task);
+                if (!deadLetter(record)) return;
+            } else if (VoucherOrderTask.FAILED.equals(task.getStatus())) {
+                if (!deadLetter(record)) return;
+            } else if (!VoucherOrderTask.SUCCESS.equals(task.getStatus())) {
+                throw new IllegalStateException("未知的下单处理状态");
+            }
+            acknowledge(recordId);
+        } catch (Exception e) {
+            // 数据库状态未知、补偿失败、补偿状态提交失败均不能 ACK。
+            log.error("秒杀订单处理未完成，保留 pending，recordId={}", recordId, e);
         }
-        acknowledge(recordId);
-        attempts.remove(recordId);
     }
 
     private void acknowledge(String recordId) {

@@ -282,4 +282,19 @@ CREATE TABLE `tb_voucher_order`  (
 -- Records of tb_voucher_order
 -- ----------------------------
 
+-- 异步下单处理记录，与支付/核销状态分开；已有同名表时保留数据。
+CREATE TABLE IF NOT EXISTS `tb_voucher_order_task` (
+  `order_id` bigint NOT NULL,
+  `user_id` bigint unsigned NOT NULL,
+  `voucher_id` bigint unsigned NOT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'PROCESSING' COMMENT 'PROCESSING/SUCCESS/COMPENSATING/FAILED',
+  `retry_count` int unsigned NOT NULL DEFAULT 0,
+  `failure_reason` varchar(255) DEFAULT NULL,
+  `restore_qualification` tinyint(1) NOT NULL DEFAULT 1,
+  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`order_id`),
+  KEY `idx_order_task_status` (`status`,`update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异步下单处理与补偿记录';
+
 SET FOREIGN_KEY_CHECKS = 1;
