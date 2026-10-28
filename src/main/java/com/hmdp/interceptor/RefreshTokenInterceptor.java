@@ -1,25 +1,20 @@
 package com.hmdp.interceptor;
 
 import cn.hutool.core.bean.BeanUtil;
-import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.UserHolder;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.jspecify.annotations.Nullable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
-/**
- * 刷新令牌拦截器
- *
- * @author CHEN
- * @date 2022/10/07
- */
 public class RefreshTokenInterceptor implements HandlerInterceptor {
+
     private final StringRedisTemplate stringRedisTemplate;
 
     public RefreshTokenInterceptor(StringRedisTemplate stringRedisTemplate) {
@@ -27,30 +22,40 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
     }
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        //从请求头中获取token
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
+            throws Exception {
+        // 获取请求头中的 token
         String token = request.getHeader("authorization");
-        if (StringUtils.isEmpty(token)) {
-            //不存在token
+        if (token == null || token.isBlank()) {
+            // 没带 token 也放行，是否 401 交给 LoginInterceptor 判断
             return true;
         }
-        //从redis中获取用户
-        Map<Object, Object> userMap =
-                stringRedisTemplate.opsForHash()
-                        .entries(RedisConstants.LOGIN_USER_KEY + token);
-        //用户不存在
+
+        // 基于 token 从 Redis 查询用户
+        String key = RedisConstants.LOGIN_USER_KEY + token;
+        Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(key);
         if (userMap.isEmpty()) {
+            // token 无效或已过期也放行，同样交给 LoginInterceptor 判断
             return true;
         }
-        //hash转UserDTO存入ThreadLocal
-        UserHolder.saveUser(BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false));
-        //token续命
-        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY + token, RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
+
+        // 将查询到的 hash 数据转为 UserDTO
+        UserDTO userDTO = BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false);
+
+        // 刷新 token 有效期（每个请求都续期，相当于滑动过期）
+        stringRedisTemplate.expire(key, Duration.ofMinutes(RedisConstants.LOGIN_USER_TTL));
+
+        // 保存用户到 ThreadLocal，供后续 Controller 使用
+        UserHolder.saveUser(userDTO);
+
+        // 只负责识别用户，从不拦截请求
         return true;
     }
 
     @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
+                                Object handler, @Nullable Exception ex) throws Exception {
+        // 请求结束清理 ThreadLocal，防止线程池复用导致用户信息串号
         UserHolder.removeUser();
     }
 }

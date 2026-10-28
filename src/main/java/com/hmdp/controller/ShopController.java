@@ -9,7 +9,7 @@ import com.hmdp.service.IShopService;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>
@@ -33,7 +33,7 @@ public class ShopController {
      */
     @GetMapping("/{id}")
     public Result queryShopById(@PathVariable("id") Long id) {
-        return shopService.queryById(id);
+        return shopService.queryShopById(id);
     }
 
     /**
@@ -43,9 +43,7 @@ public class ShopController {
      */
     @PostMapping
     public Result saveShop(@RequestBody Shop shop) {
-        // 写入数据库
-        shopService.save(shop);
-        return Result.ok();
+        return shopService.saveShop(shop);
     }
 
     /**
@@ -55,8 +53,7 @@ public class ShopController {
      */
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
-        // 写入数据库
-        return shopService.update(shop);
+        return shopService.updateShop(shop);
     }
 
     /**
@@ -68,11 +65,14 @@ public class ShopController {
     @GetMapping("/of/type")
     public Result queryShopByType(
             @RequestParam("typeId") Integer typeId,
-            @RequestParam(value = "current", defaultValue = "1") Integer current,
-            @RequestParam(value = "x",required = false) Double x,
-            @RequestParam(value = "y",required = false) Double y
+            @RequestParam(value = "current", defaultValue = "1") Integer current
     ) {
-        return shopService.queryShopByType(typeId,current,x,y);
+        // 根据类型分页查询
+        Page<Shop> page = shopService.query()
+                .eq("type_id", typeId)
+                .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+        // 返回数据
+        return Result.ok(page.getRecords());
     }
 
     /**

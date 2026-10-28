@@ -1,41 +1,21 @@
 package com.hmdp.interceptor;
 
-import cn.hutool.core.bean.BeanUtil;
-import com.baomidou.mybatisplus.core.toolkit.StringUtils;
-import com.hmdp.dto.UserDTO;
-import com.hmdp.entity.User;
-import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.UserHolder;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
-/**
- * 登录拦截器
- *
- * @author CHEN
- * @date 2022/10/07
- */
 public class LoginInterceptor implements HandlerInterceptor {
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        //获取用户
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
+            throws Exception {
+        // RefreshTokenInterceptor 已经把有效用户放进 ThreadLocal
+        // 这里只判断有没有用户，不再查询 Redis
         if (UserHolder.getUser() == null) {
-            //不存在用户 拦截
-            response.setStatus(401);
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED); // 401
             return false;
         }
-        //存在用户放行
         return true;
     }
-
-
 }

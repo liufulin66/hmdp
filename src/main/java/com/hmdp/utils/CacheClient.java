@@ -1,190 +1,262 @@
 package com.hmdp.utils;
 
-import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.json.JSONObject;
+import cn.hutool.core.convert.Convert;
+import cn.hutool.core.lang.TypeReference;
 import cn.hutool.json.JSONUtil;
-import com.baomidou.mybatisplus.core.toolkit.StringUtils;
-import com.hmdp.entity.Shop;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.LocalDateTime;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.lang.reflect.Type;
+import java.util.Collections;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-
-import static com.hmdp.utils.RedisConstants.*;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
- * redis工具
- *
- * @author CHEN
- * @date 2022/10/08
+ * 通用旁路缓存：空值缓存、互斥重建、随机 TTL、限流回源、提交后失效。
+ * 不依赖具体实体和 HTTP Result；loader 抛出的异常原样传播，不能当作空结果缓存。
  */
 @Slf4j
 @Component
 public class CacheClient {
-    private final StringRedisTemplate stringRedisTemplate;
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('del', KEYS[1]) else return 0 end", Long.class);
 
-    @Autowired
-    public CacheClient(StringRedisTemplate stringRedisTemplate) {
-        this.stringRedisTemplate = stringRedisTemplate;
+    private final StringRedisTemplate redis;
+    private final ConcurrentMap<String, LoadLimiter> loadLimiters = new ConcurrentHashMap<>();
+
+    public CacheClient(StringRedisTemplate redis) {
+        this.redis = Objects.requireNonNull(redis, "redis");
     }
 
-    /**
-     * 将任意对象序列化成json存入redis
-     *
-     * @param key   关键
-     * @param value 价值
-     * @param time  时间
-     * @param unit  单位
-     */
-    public void set(String key, Object value, Long time, TimeUnit unit) {
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time, unit);
+    /** 简单主键入口；ID 可以是 Long、Integer、String、UUID 等，前缀由业务隔离。 */
+    public <ID, R> R queryWithMutex(String cachePrefix, String lockPrefix, ID id, Class<R> type,
+                                  Function<? super ID, ? extends R> loader, CachePolicy policy) {
+        Objects.requireNonNull(loader, "loader");
+        return queryWithMutex(key(cachePrefix, id), key(lockPrefix, id), type, () -> loader.apply(id), policy);
     }
 
-    /**
-     * 将任意对象序列化成json存入redis 并且携带逻辑过期时间
-     *
-     * @param key   关键
-     * @param value 价值
-     * @param time  时间
-     * @param unit  单位
-     */
-    public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
-        //封装逻辑过期时间
-        RedisData redisData = new RedisData();
-        redisData.setData(value);
-        redisData.setExpireTime(LocalDateTime.now().plusSeconds(unit.toSeconds(time)));
-        //存入redis
-        stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
+    /** 集合、Map、分页 DTO 等嵌套泛型请传入具体的 TypeReference。 */
+    public <ID, R> R queryWithMutex(String cachePrefix, String lockPrefix, ID id, TypeReference<R> type,
+                                  Function<? super ID, ? extends R> loader, CachePolicy policy) {
+        Objects.requireNonNull(loader, "loader");
+        return queryWithMutex(key(cachePrefix, id), key(lockPrefix, id), type, () -> loader.apply(id), policy);
     }
 
-    /**
-     * 设置空值解决缓存穿透
-     *
-     * @param keyPrefix  关键前缀
-     * @param id         id
-     * @param type       类型
-     * @param dbFallback db回退
-     * @param time       时间
-     * @param unit       单位
-     * @return {@link R}
-     */
-    public <R, ID> R queryWithPassThrough(
-            String keyPrefix
-            , ID id
-            , Class<R> type
-            , Function<ID, R> dbFallback
-            , Long time
-            , TimeUnit unit) {
-        String key = keyPrefix + id;
-        //从redis中查询
-        String json = stringRedisTemplate.opsForValue().get(key);
-        //判断是否存在
-        if (StringUtils.isNotEmpty(json)) {
-            //存在直接返回
-            return JSONUtil.toBean(json, type);
-        }
-        //判断空值
-        if ("".equals(json)) {
-            return null;
-        }
-        //不存在 查询数据库
-        R r = dbFallback.apply(id);
-        if (r == null) {
-            //redis写入空值
-            this.set(key, "", CACHE_NULL_TTL, TimeUnit.SECONDS);
-            //数据库不存在 返回错误
-            return null;
-        }
-        //数据库存在 写入redis
-        this.set(key, r, time, unit);
-        //返回
-        return r;
+    /** 完整 key 入口；Supplier 可以捕获多个查询参数，key 必须包含所有影响结果的条件。 */
+    public <R> R queryWithMutex(String cacheKey, String lockKey, Class<R> type,
+                               Supplier<? extends R> loader, CachePolicy policy) {
+        return query(cacheKey, lockKey, Objects.requireNonNull(type, "type"), loader, policy, value -> false);
     }
 
-    /**
-     * 逻辑过期解决缓存击穿
-     *
-     * @param id id
-     * @return {@link Shop}
-     */
-    public <R, ID> R queryWithLogicalExpire(String keyPrefix
-            , ID id
-            , Class<R> type
-            , Function<ID, R> dbFallback
-            , Long time
-            , TimeUnit unit) {
-        String key = keyPrefix + id;
-        //从redis中查询
-        String json = stringRedisTemplate.opsForValue().get(key);
-        //判断是否存在
-        if (StringUtils.isEmpty(json)) {
-            //不存在返回空
-            return null;
+    public <R> R queryWithMutex(String cacheKey, String lockKey, TypeReference<R> type,
+                               Supplier<? extends R> loader, CachePolicy policy) {
+        return queryWithMutex(cacheKey, lockKey, type, loader, policy, value -> false);
+    }
+
+    /** shortLived 仅决定是否使用 emptyTtl，不将空集合等有效数据转换为 null。 */
+    public <R> R queryWithMutex(String cacheKey, String lockKey, TypeReference<R> type,
+                               Supplier<? extends R> loader, CachePolicy policy,
+                               Predicate<? super R> shortLived) {
+        return query(cacheKey, lockKey, Objects.requireNonNull(type, "type").getType(),
+                loader, policy, shortLived);
+    }
+
+    public <R> R queryWithMutex(String cacheKey, String lockKey, Class<R> type,
+                               Supplier<? extends R> loader, CachePolicy policy,
+                               Predicate<? super R> shortLived) {
+        return query(cacheKey, lockKey, Objects.requireNonNull(type, "type"), loader, policy, shortLived);
+    }
+
+    private <R> R query(String cacheKey, String lockKey, Type type, Supplier<? extends R> loader,
+                        CachePolicy policy, Predicate<? super R> shortLived) {
+        requireKey(cacheKey);
+        requireKey(lockKey);
+        if (cacheKey.equals(lockKey)) {
+            throw new IllegalArgumentException("缓存 key 和锁 key 不能相同");
         }
-        //命中 反序列化
-        RedisData redisData = JSONUtil.toBean(json, RedisData.class);
-        JSONObject jsonObject = (JSONObject) redisData.getData();
-        R r = BeanUtil.toBean(jsonObject, type);
-        LocalDateTime expireTime = redisData.getExpireTime();
-        //判断是否过期
-        if (expireTime.isAfter(LocalDateTime.now())) {
-            //未过期 直接返回
-            return r;
-        }
-        //已过期
-        //获取互斥锁
-        String lockKey = LOCK_SHOP_KEY + id;
-        boolean flag = tryLock(lockKey);
-        //是否获取锁成功
-        if (flag) {
-            //成功 异步重建
-            CACHE_REBUILD_EXECUTOR.submit(() -> {
+        Objects.requireNonNull(loader, "loader");
+        Objects.requireNonNull(policy, "policy");
+        Objects.requireNonNull(shortLived, "shortLived");
+        LoadLimiter limiter = limiter(policy);
+        String owner = UUID.randomUUID().toString();
+
+        for (int attempt = 0; attempt < policy.maxAttempts(); attempt++) {
+            boolean locked;
+            try {
+                CacheRead<R> cached = readCache(cacheKey, type);
+                if (cached.hit()) {
+                    return cached.value();
+                }
+                locked = Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(
+                        lockKey, owner, policy.lockTtl().toMillis(), TimeUnit.MILLISECONDS));
+            } catch (DataAccessException e) {
+                log.warn("缓存不可用，限流回源，key={}", cacheKey, e);
+                return load(cacheKey, loader, policy, shortLived, limiter, false);
+            }
+
+            if (locked) {
                 try {
-                    //查询数据库
-                    R newR = dbFallback.apply(id);
-                    //写入redis
-                    this.setWithLogicalExpire(key,newR,time,unit);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
+                    try {
+                        CacheRead<R> cached = readCache(cacheKey, type);
+                        if (cached.hit()) {
+                            return cached.value();
+                        }
+                    } catch (DataAccessException e) {
+                        log.warn("缓存复查失败，限流回源，key={}", cacheKey, e);
+                        return load(cacheKey, loader, policy, shortLived, limiter, false);
+                    }
+                    return load(cacheKey, loader, policy, shortLived, limiter, true);
                 } finally {
-                    //释放锁
-                    unLock(lockKey);
+                    unlock(lockKey, owner);
+                }
+            }
+            if (attempt + 1 < policy.maxAttempts() && !pause(policy)) {
+                throw new CacheBusyException();
+            }
+        }
+        throw new CacheBusyException();
+    }
+
+    private <R> CacheRead<R> readCache(String key, Type type) {
+        String json = redis.opsForValue().get(key);
+        if (json == null) {
+            return new CacheRead<>(false, null);
+        }
+        if (json.isEmpty()) {
+            return new CacheRead<>(true, null);
+        }
+        try {
+            // 用一元素数组读取任意 JSON 根类型：实体、数组、字符串、数字、布尔。
+            R value = Convert.convert(type, JSONUtil.parseArray("[" + json + "]").get(0));
+            return new CacheRead<>(true, value);
+        } catch (RuntimeException e) {
+            log.warn("缓存数据无法还原为指定类型，按未命中处理，key={}", key, e);
+            return new CacheRead<>(false, null);
+        }
+    }
+
+    private <R> R load(String key, Supplier<? extends R> loader, CachePolicy policy,
+                       Predicate<? super R> shortLived, LoadLimiter limiter, boolean cacheResult) {
+        if (!limiter.permits().tryAcquire()) {
+            throw new CacheBusyException();
+        }
+        try {
+            // 必须在 Redis 异常捕获范围之外调用；数据库异常不能触发二次回源。
+            R value = loader.get();
+            if (cacheResult) {
+                try {
+                    // 空字符串作为 null 标记；真正的空字符串会编码为 JSON 的 ""。
+                    String json = value == null ? "" : encode(value);
+                    boolean empty = value == null || shortLived.test(value);
+                    long ttlMillis = empty ? policy.emptyTtl().toMillis()
+                            : policy.ttl().toMillis() + ThreadLocalRandom.current()
+                                .nextLong(policy.jitter().toMillis() + 1);
+                    redis.opsForValue().set(key, json, ttlMillis, TimeUnit.MILLISECONDS);
+                } catch (RuntimeException e) {
+                    // 包括 Redis 故障和无法序列化的数据，均保留已成功取得的数据库结果。
+                    log.warn("写入缓存失败，返回回源结果，key={}", key, e);
+                }
+            }
+            return value;
+        } finally {
+            limiter.permits().release();
+        }
+    }
+
+    private String encode(Object value) {
+        // Hutool 对顶层 String 的 toJsonStr 会原样返回；借助数组统一进行 JSON 编码。
+        // 去掉外层 [] 后，实体和集合仍沿用原有缓存格式，字符串也能正确转义。
+        String array = JSONUtil.toJsonStr(Collections.singletonList(value));
+        return array.substring(1, array.length() - 1);
+    }
+
+    private LoadLimiter limiter(CachePolicy policy) {
+        LoadLimiter limiter = loadLimiters.computeIfAbsent(policy.loadGroup(),
+                group -> new LoadLimiter(policy.maxConcurrentLoads(), new Semaphore(policy.maxConcurrentLoads())));
+        if (limiter.limit() != policy.maxConcurrentLoads()) {
+            throw new IllegalArgumentException("同一 loadGroup 的回源并发上限必须一致：" + policy.loadGroup());
+        }
+        return limiter;
+    }
+
+    private void unlock(String key, String owner) {
+        try {
+            redis.execute(UNLOCK_SCRIPT, Collections.singletonList(key), owner);
+        } catch (DataAccessException e) {
+            log.warn("释放缓存重建锁失败，等待租期结束，key={}", key, e);
+        }
+    }
+
+    public <ID> void evictAfterCommit(String prefix, ID id, CachePolicy policy) {
+        evictAfterCommit(key(prefix, id), policy);
+    }
+
+    /** 在事务成功提交后删除；调用方没有事务时立即删除。重试任务不持久化。 */
+    public void evictAfterCommit(String key, CachePolicy policy) {
+        requireKey(key);
+        Objects.requireNonNull(policy, "policy");
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    evictWithRetry(key, policy);
                 }
             });
+        } else {
+            evictWithRetry(key, policy);
         }
-        //返回过期商铺信息
-        return r;
     }
 
-    /**
-     * 简易线程池
-     */
-    private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
-
-    /**
-     * 获取锁
-     *
-     * @param key 关键
-     * @return boolean
-     */
-    private boolean tryLock(String key) {
-        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS);
-        return BooleanUtil.isTrue(flag);
+    private void evictWithRetry(String key, CachePolicy policy) {
+        for (int attempt = 1; attempt <= policy.deleteAttempts(); attempt++) {
+            try {
+                redis.delete(key);
+                return;
+            } catch (DataAccessException e) {
+                log.warn("删除缓存失败，key={}，attempt={}", key, attempt, e);
+                if (attempt < policy.deleteAttempts() && !pause(policy)) {
+                    break;
+                }
+            }
+        }
+        log.error("缓存失效重试结束，依赖 TTL 过期，key={}", key);
     }
 
-    /**
-     * 释放锁
-     *
-     * @param key 关键
-     */
-    private void unLock(String key) {
-        stringRedisTemplate.delete(key);
+    private boolean pause(CachePolicy policy) {
+        try {
+            Thread.sleep(policy.retryDelay().toMillis());
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
+
+    private static String key(String prefix, Object id) {
+        requireKey(prefix);
+        return prefix + Objects.requireNonNull(id, "id");
+    }
+
+    private static void requireKey(String key) {
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("缓存 key/前缀不能为空");
+        }
+    }
+
+    private record CacheRead<R>(boolean hit, R value) { }
+    private record LoadLimiter(int limit, Semaphore permits) { }
 }

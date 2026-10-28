@@ -2,6 +2,8 @@ package com.hmdp.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.hmdp.entity.SeckillVoucher;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * <p>
@@ -13,4 +15,10 @@ import com.hmdp.entity.SeckillVoucher;
  */
 public interface SeckillVoucherMapper extends BaseMapper<SeckillVoucher> {
 
+    /**
+     * 条件扣减数据库库存，返回受影响行数；0 表示库存不足。
+     */
+    @Update("UPDATE tb_seckill_voucher SET stock = stock - 1 " +
+            "WHERE voucher_id = #{voucherId} AND stock > 0")
+    int deductStock(@Param("voucherId") Long voucherId);
 }

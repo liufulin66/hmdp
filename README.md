@@ -29,3 +29,15 @@ NOGROUP No such key 'stream.orders' or consumer group 'g1' in XREADGROUP with GR
 ```text
 XGROUP CREATE stream.orders g1 $ MKSTREAM
 ```
+
+## 3. 秒杀订单数据库约束
+
+`tb_voucher_order` 使用订单 ID 主键保证编号唯一，使用 `(user_id, voucher_id)` 联合唯一索引保证同一用户每张券最多一单。
+用户和优惠券字段均为非空；该规则包含未支付、已取消和已退款订单，取消后不会自动恢复购买资格。
+
+- 新建数据库：`hmdp.sql` 已包含该唯一索引。该文件含有 `DROP TABLE`，仅用于初始化，不要用它升级已有数据库。
+- 已有数据库：在目标业务数据库中执行 [增量 SQL](sql/migrations/20261025_add_voucher_order_user_voucher_unique.sql)。先检查当前数据库及重复订单；发现重复数据应按业务规则处理，脚本不会自动删单。
+- 重复执行：已有等价的双列唯一索引时跳过创建；名称相同但定义不同等异常情况会报错，需要核对现有表结构。
+
+创建后，同一用户、同一券再次插入订单会触发唯一键冲突；不同用户购买同一券、同一用户购买不同券均允许。
+后续下单业务需要将唯一键冲突转换为“不能重复购买”，并与库存扣减放在同一事务内。

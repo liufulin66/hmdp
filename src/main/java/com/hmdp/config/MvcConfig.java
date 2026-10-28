@@ -2,44 +2,36 @@ package com.hmdp.config;
 
 import com.hmdp.interceptor.LoginInterceptor;
 import com.hmdp.interceptor.RefreshTokenInterceptor;
-import org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration;
-import org.springframework.cache.annotation.CacheConfig;
+import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-import javax.annotation.Resource;
-
-/**
- * mvc配置
- *
- * @author CHEN
- * @date 2022/10/07
- */
 @Configuration
 public class MvcConfig implements WebMvcConfigurer {
+
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        //登陆拦截器
-        registry
-                .addInterceptor(new LoginInterceptor())
-                .excludePathPatterns("/user/code"
-                        , "/user/login"
-                        , "/blog/hot"
-                        , "/shop/**"
-                        , "/shop-type/**"
-                        , "/upload/**"
-                        , "/voucher/**"
-                )
-                .order(1);
-        //Token续命拦截器
-        registry
-                .addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
+        // order(0)：先执行，识别用户 + 续期，永远放行
+        registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
                 .addPathPatterns("/**")
                 .order(0);
+
+        // order(1)：后执行，只校验需要登录的接口
+        registry.addInterceptor(new LoginInterceptor())
+                .excludePathPatterns(
+                        "/user/code",
+                        "/user/login",
+                        "/shop/**",
+                        "/voucher/**",
+                        "/blog/hot",
+                        "/shop-type/**",
+                        "/error"
+                )
+                .order(1);
     }
 }
