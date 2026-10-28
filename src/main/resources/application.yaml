@@ -10,7 +10,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=utf8
     username: root
-    # 密码不写死：由 config/application-secret.yml 提供，该文件已被 .gitignore 忽略
+    # 密码不写死：由 config/application-secret.yml 提供（模板见 config/application-secret.example.yml），该文件已被 .gitignore 忽略
     password: "${hmdp.datasource.password:}"
   data:
     redis:
