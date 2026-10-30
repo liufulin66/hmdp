@@ -1,6 +1,9 @@
 package com.hmdp.config;
 
 import com.hmdp.dto.Result;
+import com.hmdp.controller.BlogController;
+import com.hmdp.entity.Blog;
+import com.hmdp.service.IBlogService;
 import com.hmdp.utils.UserHolder;
 import org.junit.jupiter.api.*;
 import org.springframework.context.annotation.*;
@@ -20,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 class AdminAccessTest {
     private AnnotationConfigWebApplicationContext context;
@@ -66,6 +70,51 @@ class AdminAccessTest {
         mvc.perform(post("/voucher").header("authorization", "admin")).andExpect(status().isForbidden());
     }
 
+    @Test
+    void anonymousReadersCanViewBlogDetailsAndHotList() throws Exception {
+        IBlogService blogs = context.getBean(IBlogService.class);
+        when(blogs.queryBlogById(1L)).thenReturn(Result.ok(
+                new Blog().setId(1L).setContent("探店正文").setName("作者")));
+        when(blogs.queryBlogById(999L)).thenReturn(Result.fail("笔记不存在"));
+        when(blogs.queryHotBlog(1)).thenReturn(Result.ok(java.util.List.of()));
+
+        mvc.perform(get("/blog/1")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content").value("探店正文"))
+                .andExpect(jsonPath("$.data.name").value("作者"));
+        mvc.perform(get("/blog/999")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorMsg").value("笔记不存在"));
+        mvc.perform(get("/blog/hot")).andExpect(status().isOk());
+    }
+
+    @Test
+    void anonymousReadersCannotPublishLikeOrReadPersonalBlogs() throws Exception {
+        mvc.perform(post("/blog").contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(put("/blog/like/1")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/blog/of/me")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(context.getBean(IBlogService.class));
+    }
+
+    @Test
+    void loggedInMembersCanStillUsePersonalBlogRoutes() throws Exception {
+        IBlogService blogs = context.getBean(IBlogService.class);
+        when(blogs.saveBlog(any(Blog.class))).thenReturn(Result.ok(10L));
+        when(blogs.likeBlog(1L)).thenReturn(Result.ok());
+        when(blogs.queryMyBlog(1)).thenReturn(Result.ok(java.util.List.of()));
+
+        mvc.perform(post("/blog").header("authorization", "member")
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(10));
+        mvc.perform(put("/blog/like/1").header("authorization", "member"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/blog/of/me").header("authorization", "member"))
+                .andExpect(status().isOk());
+        verify(blogs).likeBlog(1L);
+        verify(blogs).queryMyBlog(1);
+    }
+
     @Configuration
     @EnableWebMvc
     @Import(MvcConfig.class)
@@ -87,6 +136,12 @@ class AdminAccessTest {
 
         @Bean
         Routes routes() { return new Routes(); }
+
+        @Bean
+        IBlogService blogService() { return mock(IBlogService.class); }
+
+        @Bean
+        BlogController blogController() { return new BlogController(); }
     }
 
     @RestController
