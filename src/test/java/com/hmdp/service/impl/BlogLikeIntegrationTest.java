@@ -341,6 +341,122 @@ class BlogLikeIntegrationTest {
         assertEquals(2, activeUsers());
     }
 
+    @Test
+    void rankingUsesChangeVersionsAndDuplicatePutNeverMovesTheUser() {
+        likes.change(1, 9, true);
+        likes.change(1, 2, true);
+        likes.change(1, 7, true);
+        rebuildRanking();
+        assertEquals(List.of(9L, 2L, 7L), likes.rankedUsers(1, 3));
+        Double score = redis.opsForZSet().score(likes.keys(1).get(4), "9");
+        likes.change(1, 9, true);
+        assertEquals(score, redis.opsForZSet().score(likes.keys(1).get(4), "9"));
+        assertEquals("3", redis.opsForHash().get(likes.keys(1).get(0), "_version"));
+        likes.change(1, 2, false);
+        assertEquals(List.of(9L, 7L), likes.rankedUsers(1, 3));
+        likes.change(1, 2, true);
+        assertEquals(List.of(9L, 7L, 2L), likes.rankedUsers(1, 3));
+        assertEquals(5D, redis.opsForZSet().score(likes.keys(1).get(4), "2"));
+    }
+
+    @Test
+    void coldIndexRestoresCommittedVersionsInsteadOfAssigningNewScores() {
+        likes.change(1, 9, true);
+        likes.change(1, 7, true);
+        likes.change(1, 2, true);
+        flush();
+        redis.delete(likes.keys(1));
+        likes.initialize(persistence.loadSeed(1));
+        assertNull(likes.rankedUsers(1, 3));
+        rebuildRanking();
+        assertEquals(List.of(9L, 7L, 2L), likes.rankedUsers(1, 3));
+        assertEquals(1D, redis.opsForZSet().score(likes.keys(1).get(4), "9"));
+        likes.change(1, 9, true);
+        assertEquals(1D, redis.opsForZSet().score(likes.keys(1).get(4), "9"));
+        assertEquals(13, databaseTotal());
+    }
+
+    @Test
+    void rankRebuildIncludesUnflushedLikesAndCancellationsWithoutChangingCoreData() {
+        likes.change(1, 9, true);
+        flush();
+        likes.change(1, 2, true);
+        likes.change(1, 9, false);
+        rebuildRanking();
+        assertEquals(List.of(2L), likes.rankedUsers(1, 3));
+        assertEquals(2, redis.opsForHash().size(likes.keys(1).get(1)));
+        assertEquals("3", redis.opsForHash().get(likes.keys(1).get(0), "_version"));
+        redis.delete(likes.keys(1).get(4));
+        assertNull(likes.rankedUsers(1, 3));
+        assertEquals(new BlogLikeStatus(11, true), likes.change(1, 2, true));
+        rebuildRanking();
+        assertEquals(List.of(2L), likes.rankedUsers(1, 3));
+        assertEquals(2D, redis.opsForZSet().score(likes.keys(1).get(4), "2"));
+    }
+
+    @Test
+    void concurrentMutationsDuringRebuildCannotBeOverwrittenByOldSeeds() {
+        likes.change(1, 9, true);
+        likes.change(1, 2, true);
+        flush();
+        List<BlogLikeChange> oldSeed = persistence.loadRankUsers(1);
+        String token = UUID.randomUUID().toString();
+        likes.beginRanking(1, token);
+        likes.change(1, 9, false);
+        likes.change(1, 2, false);
+        likes.change(1, 2, true);
+        likes.change(1, 7, true);
+        likes.seedRanking(1, token, oldSeed);
+        likes.seedPendingRanking(1, token);
+        likes.change(1, 8, true);
+        likes.change(1, 7, false);
+        assertNull(likes.rankedUsers(1, 3), "临时榜单不能被查询为完整榜单");
+        likes.publishRanking(1, token);
+        assertEquals(List.of(2L, 8L), likes.rankedUsers(1, 3));
+        assertEquals(5D, redis.opsForZSet().score(likes.keys(1).get(4), "2"));
+        assertEquals(7D, redis.opsForZSet().score(likes.keys(1).get(4), "8"));
+        assertEquals(-1, redis.getExpire(likes.keys(1).get(4)));
+    }
+
+    @Test
+    void anInitializedEmptyRankingIsDistinctFromAnUninitializedIndex() {
+        assertNull(likes.rankedUsers(1, 3));
+        rebuildRanking();
+        assertEquals(List.of(), likes.rankedUsers(1, 3));
+        assertEquals(10, likes.read(1, null).liked(), "历史计数不能用来虚构点赞用户");
+    }
+
+    @Test
+    void obsoleteRebuildCannotPublishOrAbortANewerBuild() {
+        String oldToken = UUID.randomUUID().toString();
+        String currentToken = UUID.randomUUID().toString();
+        likes.beginRanking(1, oldToken);
+        likes.beginRanking(1, currentToken);
+        likes.change(1, 9, true);
+        assertThrows(RuntimeException.class, () -> likes.publishRanking(1, oldToken));
+        likes.abortRanking(1, oldToken);
+        likes.publishRanking(1, currentToken);
+        assertEquals(List.of(9L), likes.rankedUsers(1, 3));
+    }
+
+    @Test
+    void corruptedDerivedIndexDoesNotDecideWhetherTheUserHasLiked() {
+        rebuildRanking();
+        redis.opsForValue().set(likes.keys(1).get(4), "invalid index type");
+        assertEquals(new BlogLikeStatus(11, true), likes.change(1, 9, true));
+        assertEquals(new BlogLikeStatus(11, true), likes.change(1, 9, true));
+        rebuildRanking();
+        assertEquals(List.of(9L), likes.rankedUsers(1, 3));
+    }
+
+    private void rebuildRanking() {
+        String token = UUID.randomUUID().toString();
+        likes.beginRanking(1, token);
+        likes.seedRanking(1, token, persistence.loadRankUsers(1));
+        likes.seedPendingRanking(1, token);
+        likes.publishRanking(1, token);
+    }
+
     private void flush() {
         BlogLikeSnapshot snapshot = likes.snapshot(1);
         persistence.persist(snapshot);

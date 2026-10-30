@@ -59,7 +59,7 @@ public class BlogLikeService {
         blog.setIsLike(status.isLike());
     }
 
-    private boolean ensureInitialized(long id, Long userId) throws InterruptedException {
+    boolean ensureInitialized(long id, Long userId) throws InterruptedException {
         if (likes.read(id, userId) != null) return true;
         // 冷启动和落库共用每篇笔记的锁，避免从旧数据库快照重建缓存。
         RLock lock = redisson.getLock(likes.lockKey(id));

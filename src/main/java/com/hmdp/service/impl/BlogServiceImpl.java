@@ -33,6 +33,14 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private BlogLikeService blogLikeService;
 
+    @Resource
+    private BlogLikeRankingService blogLikeRankingService;
+
+    @Override
+    public Result queryBlogLikes(Long id) {
+        return blogLikeRankingService.queryLikes(id);
+    }
+
     @Override
     public Result saveBlog(Blog blog) {
         // 作者取自登录身份，防止前端冒用其他用户的 ID。

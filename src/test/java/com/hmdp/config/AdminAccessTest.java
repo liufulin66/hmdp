@@ -78,6 +78,7 @@ class AdminAccessTest {
                 new Blog().setId(1L).setContent("探店正文").setName("作者")));
         when(blogs.queryBlogById(999L)).thenReturn(Result.fail("笔记不存在"));
         when(blogs.queryHotBlog(1)).thenReturn(Result.ok(java.util.List.of()));
+        when(blogs.queryBlogLikes(1L)).thenReturn(Result.ok(java.util.List.of()));
 
         mvc.perform(get("/blog/1")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
@@ -87,6 +88,8 @@ class AdminAccessTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorMsg").value("笔记不存在"));
         mvc.perform(get("/blog/hot")).andExpect(status().isOk());
+        mvc.perform(get("/blog/likes/1")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
     }
 
     @Test

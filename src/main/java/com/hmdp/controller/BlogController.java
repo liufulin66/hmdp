@@ -25,6 +25,10 @@ public class BlogController {
 
     @Resource
     private IBlogService blogService;
+    @GetMapping("/likes/{id}")
+    public Result queryBlogLikes(@PathVariable("id") Long id) {
+        return blogService.queryBlogLikes(id);
+    }
 
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {

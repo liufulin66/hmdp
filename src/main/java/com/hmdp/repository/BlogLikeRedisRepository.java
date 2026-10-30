@@ -7,6 +7,8 @@ import com.hmdp.service.impl.BlogLikeSnapshot;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Repository;
 
@@ -19,6 +21,7 @@ public class BlogLikeRedisRepository {
     private static final DefaultRedisScript<List> SNAPSHOT = script("blog-like-snapshot.lua", List.class);
     private static final DefaultRedisScript<Long> ACK = script("blog-like-ack.lua", Long.class);
     private static final DefaultRedisScript<Long> INDEX = script("blog-like-index.lua", Long.class);
+    private static final DefaultRedisScript<List> RANKING = script("blog-like-ranking.lua", List.class);
     private final StringRedisTemplate redis;
     private final String prefix;
 
@@ -34,7 +37,8 @@ public class BlogLikeRedisRepository {
     }
 
     public List<String> keys(long id) {
-        return List.of(prefix + "state:" + id, prefix + "changes:" + id, prefix + "dirty", prefix + "pending:" + id);
+        return List.of(prefix + "state:" + id, prefix + "changes:" + id, prefix + "dirty", prefix + "pending:" + id,
+                prefix + "ranking:" + id, prefix + "ranking:building:" + id);
     }
 
     public String lockKey(long id) { return prefix + "lock:" + id; }
@@ -107,6 +111,47 @@ public class BlogLikeRedisRepository {
 
     public void retryLater(long id) {
         redis.opsForZSet().add(prefix + "dirty", Long.toString(id), System.currentTimeMillis() + 5000);
+    }
+
+    /** null 表示索引尚未初始化或丢失；空列表表示已经初始化的空榜单。 */
+    public List<Long> rankedUsers(long id, int limit) {
+        List<?> result = ranking("read", id, Integer.toString(limit), List.of());
+        if (result == null || result.isEmpty() || "0".equals(result.get(0).toString())) return null;
+        return result.stream().skip(1).map(value -> Long.valueOf(value.toString())).toList();
+    }
+
+    public void beginRanking(long id, String token) { ranking("begin", id, token, List.of()); }
+
+    public void seedRanking(long id, String token, List<BlogLikeChange> users) {
+        List<String> args = new ArrayList<>();
+        users.forEach(user -> { args.add(Long.toString(user.userId())); args.add(Long.toString(user.version())); });
+        ranking("seed", id, token, args);
+    }
+
+    /** 调用方持有笔记锁：落库任务不会清理这些记录，新的点赞仍由 Lua 同步到临时榜单。 */
+    public void seedPendingRanking(long id, String token) {
+        List<BlogLikeChange> chunk = new ArrayList<>(500);
+        try (Cursor<Map.Entry<Object, Object>> cursor = redis.opsForHash().scan(keys(id).get(1),
+                ScanOptions.scanOptions().count(500).build())) {
+            while (cursor.hasNext()) {
+                var entry = cursor.next();
+                String[] parts = entry.getValue().toString().split(":", 2);
+                long version = parts.length == 2 ? Long.parseLong(parts[0]) : 0;
+                chunk.add(new BlogLikeChange(Long.parseLong(entry.getKey().toString()), true, version));
+                if (chunk.size() == 500) { seedRanking(id, token, chunk); chunk.clear(); }
+            }
+        }
+        if (!chunk.isEmpty()) seedRanking(id, token, chunk);
+    }
+
+    public void publishRanking(long id, String token) { ranking("publish", id, token, List.of()); }
+    public void abortRanking(long id, String token) { ranking("abort", id, token, List.of()); }
+
+    private List<?> ranking(String action, long id, String token, List<String> values) {
+        List<String> args = new ArrayList<>(List.of(action, Long.toString(id), token,
+                Long.toString(System.currentTimeMillis())));
+        args.addAll(values);
+        return redis.execute(RANKING, keys(id), args.toArray());
     }
 
     private static <T> DefaultRedisScript<T> script(String path, Class<T> type) {

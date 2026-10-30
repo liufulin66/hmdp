@@ -14,15 +14,17 @@
   }
 
   async function toggle(vm, blog) {
-    if (!blog || !blog.id || blog.likePending) return;
+    if (!blog || !blog.id || blog.likePending) return false;
     vm.$set(blog, "likePending", true);
     revisions.set(blog, (revisions.get(blog) || 0) + 1);
     try {
       const url = "/blog/like/" + blog.id;
       const response = blog.isLike === true ? await axios.delete(url) : await axios.put(url);
       apply(vm, blog, response.data);
+      return true;
     } catch (error) {
       vm.$message.error(error.message || error);
+      return false;
     } finally {
       // 请求失败或返回异常时也恢复按钮，不能一直卡在处理中。
       vm.$set(blog, "likePending", false);
@@ -58,12 +60,18 @@
     return pending;
   }
 
-  function watch(vm, getBlogs) {
+  function watch(vm, getBlogs, afterRefresh) {
+    let updating = null;
+    const update = () => {
+      if (!updating) updating = refresh(vm, getBlogs()).then(() => afterRefresh && afterRefresh())
+        .finally(() => { updating = null; });
+      return updating;
+    };
     const onPageShow = event => {
-      if (event.persisted) refresh(vm, getBlogs());
+      if (event.persisted) update();
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refresh(vm, getBlogs());
+      if (document.visibilityState === "visible") update();
     };
     global.addEventListener("pageshow", onPageShow);
     document.addEventListener("visibilitychange", onVisibilityChange);

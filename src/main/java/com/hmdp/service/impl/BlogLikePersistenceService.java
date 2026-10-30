@@ -42,6 +42,11 @@ public class BlogLikePersistenceService {
                 userId != null && blogLikeMapper.isLiked(blogId, userId) > 0);
     }
 
+    @Transactional(readOnly = true)
+    public List<BlogLikeChange> loadRankUsers(long blogId) {
+        return blogLikeMapper.selectRankUsers(blogId);
+    }
+
     @Transactional
     public void persist(BlogLikeSnapshot snapshot) {
         blogLikeMapper.ensureSyncRow(snapshot.blogId());

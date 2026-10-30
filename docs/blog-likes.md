@@ -19,6 +19,7 @@ hmdp:
     batch-size: 100
     user-batch-size: 500
     sql-batch-size: 200
+    ranking-size: 3
 ```
 
 这里的批量是把一个周期内的操作合并后写入。每轮最多处理 `batch-size` 篇笔记；每篇最多读取 `user-batch-size` 个用户（硬上限 1000）；每条 SQL 最多处理 `sql-batch-size` 个用户（硬上限 500）。同一篇的本批 SQL 和一次计数增减在一个独立事务内提交。积压较多、数据库异常时，同步延迟可能超过 5 秒。详情、热门列表、我的笔记展示 Redis 实时计数；热门列表的排序依据已落库总数，因此允许短暂延迟。Redis 查询故障时展示已落库状态，写入故障时返回失败供重试。
@@ -31,16 +32,26 @@ Redis 使用 `blog:like:state:{id}` 保存总数、全局版本和用户关系�
 
 这是异步最终一致方案：数据库恢复的是已提交批次。Redis 在提交到数据库之前丢失数据，可能丢失这部分尚未落库的点赞；数据库事务、Lua 和重试不能消除这个窗口。部署时应根据可接受的数据损失配置 Redis 持久化，并使用 `noeviction` 等方式避免淘汰。完整 Redis 故障恢复后需核对已提交版本；不能承诺 Redis 持久化回退时仍自动维持跨系统的严格一致性。
 
-Nginx 中的 `index.html`、`info.html` 和 `blog-detail.html` 根据 `isLike` 分别发送 PUT / DELETE，并直接使用返回状态更新数量和图标。请求期间暂时忽略重复点击。配套页面在 `D:/JavaCode/nginx-1.18.0/html/hmdp`，不在本仓库内。
+`GET /blog/likes/{id}` 和详情一样允许游客查询。当前前端直接遍历返回列表，没有截取数量，因此后端默认返回最先点赞的 3 位用户；可通过 `hmdp.blog-like.ranking-size` 调整（上限 100）。先用 Redis `ZRANGE` 按 score 升序取 ID，再通过一次 `listByIds` 批量查询资料，最后按 Redis ID 顺序组装 `UserDTO`。只返回 ID、昵称和头像，不返回手机号等字段。用户资料已不存在时跳过。
 
-三个页面通过带版本号的 `<script src="./js/blog-likes.js?v=20261030-2"></script>` 使用仓库中的 `frontend/js/blog-likes.js`。点赞处理显式更新 Vue 2 响应式字段，无论成功或失败都解除按钮的处理中状态。浏览器从历史缓存恢复页面时，不会再次执行 Vue 的 `created`，因此在 `mounted` 中注册 `blogLikes.watch`，在 `beforeDestroy` 中清理监听。`pageshow.persisted` 和重新可见事件会重新查询已展示笔记的实时状态，保留原列表、分页和滚动位置；较旧的查询响应不能覆盖随后发生的点赞操作。
+ZSet `blog:like:ranking:{id}` 的 member 为 userId，score 复用该用户真实点赞操作的变更版本。现有 `blog-like-change.lua` 在同一脚本内维护状态、计数、待提交记录和榜单。重复 PUT 不进入状态变更分支，不更新 score；取消时移除，再次点赞使用新版本重新排队。
 
-Nginx 对 HTML 响应设置 `Cache-Control: no-cache`，页面脚本使用显式版本号。已经打开的旧页面仍需强制刷新一次才能载入修复，此后正常返回会自动同步。详情不再请求尚未实现的 `/blog/likes/{id}` 点赞用户列表。
+榜单是可重建的排序索引，不能用它判断是否点赞或计算数量。首次查询或索引丢失时，持有同一篇笔记的 Redisson 锁，读取已落库用户版本，并分批合并 Redis 未落库状态。先构建临时 ZSet，再原子替换正式榜单。构建期间点赞 Lua 同步更新临时榜单；播种旧记录时再次检查当前用户状态和版本，避免覆盖新点赞、复活已取消用户。所有权标识和超时用于防止旧构建发布或清理新构建；失败可重试，不展示半成品。
+
+早期数据没有保存顺序，对应数据库版本为 0；这些用户无法还原真实历史顺序，同分时沿用 Redis 的 member 字典序，不虚构点赞时间。历史点赞总数也不能用来虚构用户。初始化不改变总数、变更版本或待提交记录，不需要新增数据库表或字段。
+
+详情首次加载、点赞/取消成功、从历史缓存返回或重新可见时刷新榜单；较旧的榜单响应不会覆盖较新的结果。
+
+Nginx 中的 `index.html`、`info.html` 和 `blog-detail.html` 根据 `isLike` 分别发送 PUT / DELETE，并直接使用返回状态更新数量和图标。请求期间暂时忽略重复点击。配套页面同时保存在仓库 `frontend/` 和本机 `D:/JavaCode/nginx-1.18.0/html/hmdp`。
+
+三个页面通过带版本号的 `<script src="./js/blog-likes.js?v=20261030-3"></script>` 使用仓库中的 `frontend/js/blog-likes.js`。点赞处理显式更新 Vue 2 响应式字段，无论成功或失败都解除按钮的处理中状态。浏览器从历史缓存恢复页面时，不会再次执行 Vue 的 `created`，因此在 `mounted` 中注册 `blogLikes.watch`，在 `beforeDestroy` 中清理监听。`pageshow.persisted` 和重新可见事件会重新查询已展示笔记的实时状态，保留原列表、分页和滚动位置；较旧的查询响应不能覆盖随后发生的点赞操作。
+
+Nginx 对 HTML 响应设置 `Cache-Control: no-cache`，页面脚本使用显式版本号。已经打开的旧页面仍需强制刷新一次才能载入修复，此后正常返回会自动同步。详情通过 `/blog/likes/{id}` 查询新实现的点赞用户榜单。
 
 前端回归测试覆盖连续点赞/取消、重复点击、失败后恢复、历史返回刷新、旧响应竞争和本机实际 Vue 2 的响应式更新：
 
 ```powershell
-node --test frontend/tests/blog-likes.test.cjs
+node --test frontend/tests/*.test.cjs
 ```
 
 实际 Vue 运行时默认从上述配套目录读取；其他机器可通过 `HMDP_FRONTEND_ROOT` 指定目录，未找到 Vue 文件时只跳过这一项运行时测试。
@@ -48,5 +59,5 @@ node --test frontend/tests/blog-likes.test.cjs
 集成测试只写当前连接的 MySQL 临时表和随机前缀 Redis key，不启动应用及秒杀消费者：
 
 ```powershell
-mvn -s target/order-task-maven-settings.xml '-Dmaven.compiler.useIncrementalCompilation=true' '-Dhmdp.integration=true' '-Dtest=BlogLikeIntegrationTest,BlogLikePersistenceServiceTest,BlogLikeServiceTest,BlogLikeFlushServiceTest,BlogServiceImplTest,AdminAccessTest' test
+mvn -s target/order-task-maven-settings.xml '-Dmaven.compiler.useIncrementalCompilation=true' '-Dhmdp.integration=true' '-Dtest=BlogLikeRankingServiceTest,BlogLikeIntegrationTest,BlogLikePersistenceServiceTest,BlogLikeServiceTest,BlogLikeFlushServiceTest,BlogServiceImplTest,AdminAccessTest' test
 ```

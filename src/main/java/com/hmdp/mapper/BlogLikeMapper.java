@@ -9,6 +9,9 @@ public interface BlogLikeMapper {
     @Select("SELECT user_id FROM tb_blog_like WHERE blog_id=#{blogId} AND liked=1")
     List<Long> selectLikedUsers(long blogId);
 
+    @Select("SELECT user_id,liked,version FROM tb_blog_like WHERE blog_id=#{blogId} AND liked=1")
+    List<BlogLikeChange> selectRankUsers(long blogId);
+
     @Select("SELECT COUNT(*) FROM tb_blog_like WHERE blog_id=#{blogId} AND user_id=#{userId} AND liked=1")
     int isLiked(@Param("blogId") long blogId, @Param("userId") long userId);
 

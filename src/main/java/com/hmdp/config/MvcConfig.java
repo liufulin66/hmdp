@@ -37,6 +37,7 @@ public class MvcConfig implements WebMvcConfigurer {
                         "/blog/hot",
                         // 只放行数字 ID 的详情路径，不能使用 /blog/** 放开发布和点赞。
                         "/blog/{id:[0-9]+}",
+                        "/blog/likes/{id:[0-9]+}",
                         "/shop-type/**",
                         "/error"
                 )

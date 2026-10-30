@@ -153,7 +153,7 @@
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
 <script src="./js/common.js"></script>
-<script src="./js/blog-likes.js?v=20261030-2"></script>
+<script src="./js/blog-likes.js?v=20261030-3"></script>
 <script>
   let each = function (ary, callback) {
     for (let i = 0, l = ary.length; i < l; i++) {
@@ -190,7 +190,7 @@
       this.queryBlogById(id);
     },
     mounted() {
-      this.stopLikeSync = blogLikes.watch(this, () => [this.blog]);
+      this.stopLikeSync = blogLikes.watch(this, () => [this.blog], () => this.queryLikeList(this.blog.id));
     },
     beforeDestroy() {
       if (this.stopLikeSync) this.stopLikeSync();
@@ -222,7 +222,7 @@
             this.blog = data;
             this.$nextTick(this.init);
             this.queryShopById(data.shopId)
-            // 基础详情页暂不加载点赞用户列表。
+            this.queryLikeList(id);
             this.queryLoginUser();
           })
           .catch(this.$message.error)
@@ -235,8 +235,18 @@
           })
           .catch(this.$message.error)
       },
-      addLike(){
-        return blogLikes.toggle(this, this.blog);
+      async addLike(){
+        if (await blogLikes.toggle(this, this.blog)) return this.queryLikeList(this.blog.id);
+      },
+      queryLikeList(id) {
+        if (!id) return Promise.resolve();
+        const requestId = (this.likeListRequestId || 0) + 1;
+        this.likeListRequestId = requestId;
+        return axios.get("/blog/likes/" + id)
+          .then(({data}) => {
+            if (this.likeListRequestId === requestId && String(this.blog.id) === String(id)) this.likes = data;
+          })
+          .catch(err => this.$message.error(err.message || err));
       },
       isFollowed(){
         axios.get("/follow/or/not/" + this.blog.userId)

@@ -108,6 +108,21 @@ test('profile lists reuse one query for copies of the same blog', async () => {
   assert.equal(second.isLike, true);
 });
 
+test('history restore refreshes ranking once after the visible count has been refreshed', async () => {
+  const f = fixture();
+  const blog = {id: 4, liked: 10, isLike: false};
+  Object.assign(f.server, {liked: 11, isLike: true});
+  let rankRefreshes = 0;
+  f.api.watch(f.app, () => [blog], () => {
+    assert.equal(blog.liked, 11);
+    rankRefreshes++;
+  });
+  f.window.emit('pageshow', {persisted: true});
+  f.document.emit('visibilitychange');
+  await tick();
+  assert.equal(rankRefreshes, 1);
+});
+
 const frontendRoot = process.env.HMDP_FRONTEND_ROOT || 'D:/JavaCode/nginx-1.18.0/html/hmdp';
 const vuePath = path.join(frontendRoot, 'js/vue.js');
 test('the deployed Vue 2 runtime observes fields added to an initially empty detail object',

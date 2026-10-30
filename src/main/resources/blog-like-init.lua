@@ -11,6 +11,6 @@ if dirtyType ~= 'none' and dirtyType ~= 'zset' then return redis.error_reply('in
 if redis.call('exists', KEYS[2]) == 1 or redis.call('exists', KEYS[4]) == 1 or redis.call('zscore', KEYS[3], ARGV[1]) then
     return redis.error_reply('like state missing while changes are pending')
 end
-redis.call('hset', KEYS[1], '_liked', ARGV[2], '_version', ARGV[3], '_flushed', ARGV[3], '_indexed', '1')
+redis.call('hset', KEYS[1], '_liked', ARGV[2], '_version', ARGV[3], '_flushed', ARGV[3], '_indexed', '1', '_rank_ready', '0')
 for i = 4, #ARGV do redis.call('hset', KEYS[1], 'u:' .. ARGV[i], '1') end
 return 1
