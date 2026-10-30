@@ -36,6 +36,11 @@ public class BlogController {
         return blogService.likeBlog(id);
     }
 
+    @DeleteMapping("/like/{id}")
+    public Result unlikeBlog(@PathVariable("id") Long id) {
+        return blogService.unlikeBlog(id);
+    }
+
     @GetMapping("/of/me")
     public Result queryMyBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
         return blogService.queryMyBlog(current);

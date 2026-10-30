@@ -25,6 +25,7 @@ class BlogServiceImplTest {
         service = spy(new BlogServiceImpl());
         userService = mock(IUserService.class);
         ReflectionTestUtils.setField(service, "userService", userService);
+        ReflectionTestUtils.setField(service, "blogLikeService", mock(BlogLikeService.class));
     }
 
     @AfterEach

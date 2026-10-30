@@ -30,6 +30,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Resource
     private IUserService userService;
 
+    @Resource
+    private BlogLikeService blogLikeService;
+
     @Override
     public Result saveBlog(Blog blog) {
         // 作者取自登录身份，防止前端冒用其他用户的 ID。
@@ -43,8 +46,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result likeBlog(Long id) {
-        update().setSql("liked = liked + 1").eq("id", id).update();
-        return Result.ok();
+        return blogLikeService.changeLike(id, true);
+    }
+
+    @Override
+    public Result unlikeBlog(Long id) {
+        return blogLikeService.changeLike(id, false);
     }
 
     @Override
@@ -52,6 +59,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         UserDTO user = UserHolder.getUser();
         Page<Blog> page = query().eq("user_id", user.getId())
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        page.getRecords().forEach(blogLikeService::fillLikes);
         return Result.ok(page.getRecords());
     }
 
@@ -61,6 +69,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
         List<Blog> records = page.getRecords();
         records.forEach(this::fillBlogAuthor);
+        records.forEach(blogLikeService::fillLikes);
         return Result.ok(records);
     }
 
@@ -74,6 +83,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             return Result.fail("笔记不存在");
         }
         fillBlogAuthor(blog);
+        blogLikeService.fillLikes(blog);
         return Result.ok(blog);
     }
 

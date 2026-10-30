@@ -1,6 +1,7 @@
 package com.hmdp.config;
 
 import com.hmdp.dto.Result;
+import com.hmdp.dto.BlogLikeStatus;
 import com.hmdp.controller.BlogController;
 import com.hmdp.entity.Blog;
 import com.hmdp.service.IBlogService;
@@ -93,6 +94,7 @@ class AdminAccessTest {
         mvc.perform(post("/blog").contentType("application/json").content("{}"))
                 .andExpect(status().isUnauthorized());
         mvc.perform(put("/blog/like/1")).andExpect(status().isUnauthorized());
+        mvc.perform(delete("/blog/like/1")).andExpect(status().isUnauthorized());
         mvc.perform(get("/blog/of/me")).andExpect(status().isUnauthorized());
         verifyNoInteractions(context.getBean(IBlogService.class));
     }
@@ -101,17 +103,25 @@ class AdminAccessTest {
     void loggedInMembersCanStillUsePersonalBlogRoutes() throws Exception {
         IBlogService blogs = context.getBean(IBlogService.class);
         when(blogs.saveBlog(any(Blog.class))).thenReturn(Result.ok(10L));
-        when(blogs.likeBlog(1L)).thenReturn(Result.ok());
+        when(blogs.likeBlog(1L)).thenReturn(Result.ok(new BlogLikeStatus(11, true)));
+        when(blogs.unlikeBlog(1L)).thenReturn(Result.ok(new BlogLikeStatus(10, false)));
         when(blogs.queryMyBlog(1)).thenReturn(Result.ok(java.util.List.of()));
 
         mvc.perform(post("/blog").header("authorization", "member")
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(10));
         mvc.perform(put("/blog/like/1").header("authorization", "member"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liked").value(11))
+                .andExpect(jsonPath("$.data.isLike").value(true));
+        mvc.perform(delete("/blog/like/1").header("authorization", "member"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liked").value(10))
+                .andExpect(jsonPath("$.data.isLike").value(false));
         mvc.perform(get("/blog/of/me").header("authorization", "member"))
                 .andExpect(status().isOk());
         verify(blogs).likeBlog(1L);
+        verify(blogs).unlikeBlog(1L);
         verify(blogs).queryMyBlog(1);
     }
 
