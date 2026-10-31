@@ -18,6 +18,7 @@
 | `src/main/java/com/hmdp/repository/FeedRedisRepository.java` | ZADD NX 和倒序带分数范围查询；测试可注入随机 key 前缀 |
 | `src/main/java/com/hmdp/utils/SystemConstants.java` | 每页 2 条、时间戳安全范围及偏移边界 |
 | `sql/migrations/20261031_add_feed_delivery_task.sql`、`hmdp.sql` | 任务表、粉丝方向索引；前者用于已有库的非破坏性升级 |
+| `sql/migrations/20261031_backfill_feed_initial_due_time.sql` | 修正旧版未尝试任务的零到期时间，不改变已有重试计划和租约 |
 | `frontend/info.html`、`frontend/js/feed.js` | 复用“关注”动态标签，刷新、滚动加载、游标、旧响应过滤、状态提示及点赞对象保护 |
 | `src/test/java/com/hmdp/service/impl/FeedIntegrationTest.java` | 真实 MySQL/Redis 的隔离集成验证 |
 | `src/test/java/com/hmdp/service/impl/BlogServiceImplTest.java`、`config/AdminAccessTest.java` | 发布编排、参数/身份校验、批量顺序及 MVC 访问控制 |
@@ -33,8 +34,8 @@
 ```sql
 INSERT INTO tb_blog (...);
 
-INSERT INTO tb_feed_delivery_task(blog_id,user_id,published_at)
-SELECT :blogId,user_id,:publishedAt
+INSERT INTO tb_feed_delivery_task(blog_id,user_id,published_at,next_attempt_at)
+SELECT :blogId,user_id,:publishedAt,:publishedAt
 FROM tb_follow
 WHERE follow_user_id=:authorId;
 ```
@@ -83,6 +84,10 @@ hmdp:
 
 默认总共最多 5 次尝试（包含首次），失败等待依次为 1 秒、5 秒、30 秒、120 秒。定时任务每轮完成后再等待默认 1 秒，每轮最多处理 100 条；不承诺故障时固定一秒内送达。首次投递按任务 ID 分批读取，每批最多 100 条，但会串行尝试该笔记的全部新任务。
 
+首次创建任务显式将 `next_attempt_at` 设置为同一次发布的毫秒时间戳，不依赖表结构的默认值 0。新任务和到期重试统一按 `next_attempt_at ASC, id ASC` 选取，避免持续新增任务以 0 抢占旧重试。相同到期时间按任务 ID 保持确定顺序；这不保证系统过载时的投递时限，也不改变发布请求中首次同步投递的路径。
+
+已有库升级时，先停止旧版本写入，再执行 [首次到期时间回填](../sql/migrations/20261031_backfill_feed_initial_due_time.sql)。脚本只将 `PENDING / attempts=0 / next_attempt_at=0` 且原发布时间有效的历史任务恢复为原发布时间，可重复执行，不调整已有重试退避、租约和终态任务。本次检查实际任务表为空，无需回填业务数据。
+
 FAILED 不自动删除。维护时先查询任务，再针对明确的任务 ID 重置，继续沿用原接收人与发布时间，例如：
 
 ```sql
@@ -91,7 +96,9 @@ FROM tb_feed_delivery_task WHERE status='FAILED' ORDER BY id LIMIT 100;
 
 -- :taskId 必须替换为已核对的单个失败任务 ID；本次未执行任何业务任务重置。
 UPDATE tb_feed_delivery_task
-SET status='PENDING',attempts=0,next_attempt_at=0,lease_until=0,claim_token=NULL
+SET status='PENDING',attempts=0,
+    next_attempt_at=CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS UNSIGNED),
+    lease_until=0,claim_token=NULL
 WHERE id=:taskId AND status='FAILED';
 ```
 
@@ -143,7 +150,9 @@ node --test frontend/tests/*.test.cjs
 git diff --check
 ```
 
-实际结果：后端全套 195 项通过，前端 38 项通过，无失败、无跳过，`git diff --check` 通过。日志保存在忽略的 `target/feed-regression-test.log` 和 `target/feed-frontend-test.log`。
+原功能交付时的验证结果：后端全套 195 项通过，前端 38 项通过，无失败、无跳过，`git diff --check` 通过。日志保存在忽略的 `target/feed-regression-test.log` 和 `target/feed-frontend-test.log`。
+
+重试公平性修复新增真实 MySQL/Redis 回归：每轮只处理 1 条任务，持续加入较晚到期的新任务，检查旧重试依次成功后继续处理新任务。修复前该用例实际失败，修复后 `FeedIntegrationTest` 10 项与 `BlogServiceImplTest` 9 项全部通过，无失败、无跳过；另验证回填仅影响旧版未尝试的零到期 PENDING 任务，且可重复执行。本轮未重新运行全套或前端测试。日志位于忽略的 `target/feed-fairness-before.log` 和 `target/feed-fairness-after.log`。
 
 Feed 集成测试仅复制真实表结构到随机命名物理测试表，Redis 只写随机前缀。包括发布/任务失败回滚、仅当时粉丝接收、统一时间戳、NX 重推、部分失败后新建工作实例恢复、关注变动不改变任务接收人、真实数据库并发领取、租约回收及旧令牌确认拒绝、重试耗尽、Redis 成功但数据库确认失败后重放、同毫秒跨四页、缺失笔记、空收件箱及身份隔离。点赞填充在 Feed 集成测试中使用替身，点赞真实实现另有既有 MySQL/Redis 集成回归测试。
 

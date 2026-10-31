@@ -8,6 +8,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.FeedDeliveryTask;
 import com.hmdp.mapper.*;
 import com.hmdp.repository.FeedRedisRepository;
 import com.hmdp.utils.UserHolder;
@@ -29,6 +30,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -150,12 +153,75 @@ class FeedIntegrationTest {
         assertEquals(blog.getId(), result.getData());
         assertEquals(1L, jdbc.queryForObject("SELECT user_id FROM " + table("tb_blog"), Long.class));
         assertEquals(2L, countTasks("SUCCESS"));
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM " + table("tb_feed_delivery_task")
+                + " WHERE next_attempt_at<>published_at OR next_attempt_at=0", Long.class));
         double score = redis.opsForZSet().score(inbox.key(2), blog.getId().toString());
         assertEquals(score, redis.opsForZSet().score(inbox.key(3), blog.getId().toString()));
         assertFalse(Boolean.TRUE.equals(redis.hasKey(inbox.key(4))));
         assertFalse(Boolean.TRUE.equals(redis.hasKey(inbox.key(1))));
         inbox.push(2, blog.getId(), (long) score + 99999);
         assertEquals(score, redis.opsForZSet().score(inbox.key(2), blog.getId().toString()));
+    }
+
+    @Test
+    void dueRetriesAreNotStarvedByContinuouslyCreatedTasks() {
+        jdbc.update("DELETE FROM " + table("tb_follow") + " WHERE user_id=3");
+        long publishedAt = System.currentTimeMillis() - 10000;
+        for (int index = 0; index < 3; index++) {
+            long blogId = 100 + index;
+            insertNote(blogId);
+            assertEquals(1, tasks.createForFollowers(blogId, 1, publishedAt));
+            FeedDeliveryTask task = tasks.selectNewForBlog(blogId, 0, 1).get(0);
+            assertEquals(1, tasks.claim(task.getId(), 0, 5, "failed-first-attempt",
+                    publishedAt, publishedAt + 60000));
+            assertEquals(1, tasks.fail(task.getId(), "failed-first-attempt", "PENDING",
+                    publishedAt + 1000 + index, "temporary failure"));
+        }
+
+        FeedDeliveryService worker = delivery(inbox);
+        ReflectionTestUtils.setField(worker, "batchSize", 1);
+        // 每轮新增任务，且每轮只能领取一条，检验真实 SQL 是否让旧重试一直排不到。
+        for (int round = 0; round < 3; round++) {
+            long newBlogId = 200 + round;
+            insertNote(newBlogId);
+            assertEquals(1, tasks.createForFollowers(newBlogId, 1, publishedAt + 5000 + round));
+            worker.retry();
+            assertEquals("SUCCESS", jdbc.queryForObject("SELECT status FROM " + table("tb_feed_delivery_task")
+                    + " WHERE blog_id=?", String.class, 100L + round),
+                    "较晚创建的新任务不能抢占更早到期的重试任务");
+            assertEquals(round + 1L, countTasks("SUCCESS"));
+            assertNull(redis.opsForZSet().score(inbox.key(2), Long.toString(newBlogId)));
+        }
+        assertEquals(3L, countTasks("PENDING"));
+        worker.retry();
+        assertNotNull(redis.opsForZSet().score(inbox.key(2), "200"), "旧重试处理后继续处理新任务");
+    }
+
+    @Test
+    void initialDueTimeBackfillOnlyChangesLegacyUnattemptedPendingTasksAndIsIdempotent() throws Exception {
+        String[] statuses = {"PENDING", "PENDING", "PENDING", "PROCESSING", "SUCCESS", "FAILED", "PENDING"};
+        int[] attempts = {0, 1, 0, 1, 1, 5, 0};
+        long[] dueTimes = {0, 0, 1200, 0, 0, 0, 0};
+        for (int index = 0; index < statuses.length; index++) {
+            long blogId = 300 + index;
+            insertNote(blogId);
+            jdbc.update("INSERT INTO " + table("tb_feed_delivery_task")
+                            + "(blog_id,user_id,published_at,status,attempts,next_attempt_at,lease_until,claim_token)"
+                            + " VALUES(?,2,?,?,?,?,?,?)", blogId, index == 6 ? 0 : 1000 + index,
+                    statuses[index], attempts[index], dueTimes[index], index == 3 ? 60000 : 0,
+                    index == 3 ? "active-owner" : null);
+        }
+        String stateQuery = "SELECT blog_id,user_id,published_at,status,attempts,lease_until,claim_token FROM "
+                + table("tb_feed_delivery_task") + " ORDER BY blog_id";
+        var originalStates = jdbc.queryForList(stateQuery);
+        String migration = Files.readString(Path.of("sql/migrations/20261031_backfill_feed_initial_due_time.sql"))
+                .replace("tb_feed_delivery_task", table("tb_feed_delivery_task"));
+
+        assertEquals(1, jdbc.update(migration));
+        assertEquals(List.of(1000L, 0L, 1200L, 0L, 0L, 0L, 0L), jdbc.queryForList(
+                "SELECT next_attempt_at FROM " + table("tb_feed_delivery_task") + " ORDER BY blog_id", Long.class));
+        assertEquals(originalStates, jdbc.queryForList(stateQuery), "不改变任务状态、尝试次数、原时间或租约");
+        assertEquals(0, jdbc.update(migration), "重复执行回填无额外更新");
     }
 
     @Test

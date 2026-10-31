@@ -6,9 +6,9 @@ import org.apache.ibatis.annotations.*;
 import java.util.List;
 
 public interface FeedDeliveryTaskMapper {
-    // 与笔记 INSERT 使用同一事务。一次 SQL 固定发布时查询到的全部接收人。
-    @Insert("INSERT INTO tb_feed_delivery_task(blog_id,user_id,published_at) "
-            + "SELECT #{blogId},user_id,#{publishedAt} FROM tb_follow WHERE follow_user_id=#{authorId}")
+    // 同一事务固定接收人、发布时间和首次到期时间；不能让默认的 0 抢占已到期的重试。
+    @Insert("INSERT INTO tb_feed_delivery_task(blog_id,user_id,published_at,next_attempt_at) "
+            + "SELECT #{blogId},user_id,#{publishedAt},#{publishedAt} FROM tb_follow WHERE follow_user_id=#{authorId}")
     int createForFollowers(@Param("blogId") long blogId, @Param("authorId") long authorId,
                           @Param("publishedAt") long publishedAt);
 
