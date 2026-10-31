@@ -3,8 +3,15 @@ package com.hmdp.config;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.BlogLikeStatus;
 import com.hmdp.controller.BlogController;
+import com.hmdp.controller.FollowController;
+import com.hmdp.controller.UserController;
+import com.hmdp.dto.UserDTO;
+import com.hmdp.dto.ScrollResult;
 import com.hmdp.entity.Blog;
 import com.hmdp.service.IBlogService;
+import com.hmdp.service.IFollowService;
+import com.hmdp.service.IUserService;
+import com.hmdp.service.IUserInfoService;
 import com.hmdp.utils.UserHolder;
 import org.junit.jupiter.api.*;
 import org.springframework.context.annotation.*;
@@ -128,6 +135,74 @@ class AdminAccessTest {
         verify(blogs).queryMyBlog(1);
     }
 
+    @Test
+    void followRoutesAndTheProfileEndpointRequireLogin() throws Exception {
+        for (String path : new String[]{"/follow/or/not/3", "/follow/common/3", "/user/3"}) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("authorization", "expired")).andExpect(status().isUnauthorized());
+        }
+        mvc.perform(put("/follow/3/true")).andExpect(status().isUnauthorized());
+        mvc.perform(put("/follow/3/false")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(context.getBean(IFollowService.class), context.getBean(IUserService.class));
+    }
+
+    @Test
+    void followRoutesKeepBooleanResultsAndDefaultPagination() throws Exception {
+        IFollowService follows = context.getBean(IFollowService.class);
+        when(follows.follow(3L, true)).thenReturn(Result.ok(true));
+        when(follows.follow(3L, false)).thenReturn(Result.ok(false));
+        when(follows.isFollow(3L)).thenReturn(Result.ok(true));
+        UserDTO profile = new UserDTO();
+        profile.setId(3L);
+        profile.setNickName("three");
+        profile.setIcon("three.png");
+        when(follows.commonFollow(3L, 1)).thenReturn(Result.ok(java.util.List.of(profile)));
+        when(context.getBean(IUserService.class).queryUserById(3L)).thenReturn(Result.ok(profile));
+        mvc.perform(put("/follow/3/true").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(true));
+        mvc.perform(put("/follow/3/false").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(false));
+        mvc.perform(get("/follow/or/not/3").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").value(true));
+        mvc.perform(get("/follow/common/3").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data[0].id").value(3))
+                .andExpect(jsonPath("$.data[0].phone").doesNotExist())
+                .andExpect(jsonPath("$.data[0].password").doesNotExist());
+        mvc.perform(get("/user/3").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.nickName").value("three"))
+                .andExpect(jsonPath("$.data.phone").doesNotExist());
+        verify(follows).commonFollow(3L, 1);
+    }
+
+    @Test
+    void malformedFollowFlagsIdsAndPagesNeverReachTheService() throws Exception {
+        for (String flag : new String[]{"yes", "1", "TRUE", "wrong"}) {
+            mvc.perform(put("/follow/3/" + flag).header("authorization", "member"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(false));
+        }
+        for (String path : new String[]{"/follow/or/not/not-a-number", "/follow/common/9223372036854775808", "/follow/common/3?current=bad"}) {
+            mvc.perform(get(path).header("authorization", "member")).andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(context.getBean(IFollowService.class));
+    }
+
+    @Test
+    void feedIsPrivateAndTheRouteUsesCursorParametersRatherThanARequestedUser() throws Exception {
+        mvc.perform(get("/blog/of/follow?lastId=1000")).andExpect(status().isUnauthorized());
+        IBlogService blogs = context.getBean(IBlogService.class);
+        ScrollResult empty = new ScrollResult();
+        empty.setList(java.util.List.of());
+        empty.setMinTime(0L);
+        empty.setOffset(0);
+        when(blogs.queryBlogOfFollow(1000L, 0)).thenReturn(Result.ok(empty));
+        mvc.perform(get("/blog/of/follow?lastId=1000&userId=999").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.list").isEmpty())
+                .andExpect(jsonPath("$.data.minTime").value(0)).andExpect(jsonPath("$.data.offset").value(0));
+        verify(blogs).queryBlogOfFollow(1000L, 0);
+        mvc.perform(get("/blog/of/follow?lastId=bad").header("authorization", "member")).andExpect(status().isBadRequest());
+        mvc.perform(get("/blog/of/follow").header("authorization", "member")).andExpect(status().isBadRequest());
+    }
+
     @Configuration
     @EnableWebMvc
     @Import(MvcConfig.class)
@@ -155,6 +230,21 @@ class AdminAccessTest {
 
         @Bean
         BlogController blogController() { return new BlogController(); }
+
+        @Bean
+        IFollowService followService() { return mock(IFollowService.class); }
+
+        @Bean
+        FollowController followController() { return new FollowController(); }
+
+        @Bean
+        IUserService userService() { return mock(IUserService.class); }
+
+        @Bean
+        IUserInfoService userInfoService() { return mock(IUserInfoService.class); }
+
+        @Bean
+        UserController userController() { return new UserController(); }
     }
 
     @RestController

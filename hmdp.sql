@@ -74,7 +74,9 @@ CREATE TABLE `tb_follow`  (
   `user_id` bigint(20) UNSIGNED NOT NULL COMMENT '用户id',
   `follow_user_id` bigint(20) UNSIGNED NOT NULL COMMENT '关联的用户id',
   `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE KEY `uk_follow_user_target` (`user_id`, `follow_user_id`) USING BTREE,
+  KEY `idx_follow_target_user` (`follow_user_id`, `user_id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Compact;
 
 -- ----------------------------
@@ -315,5 +317,25 @@ CREATE TABLE IF NOT EXISTS `tb_blog_like_sync` (
   `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`blog_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='点赞批量同步的已提交版本';
+
+-- Feed 每个接收人的持久化投递状态；与笔记在同一事务内创建。
+CREATE TABLE IF NOT EXISTS tb_feed_delivery_task (
+  id bigint unsigned NOT NULL AUTO_INCREMENT,
+  blog_id bigint unsigned NOT NULL,
+  user_id bigint unsigned NOT NULL COMMENT '发布时确定的收件人',
+  published_at bigint unsigned NOT NULL COMMENT '固定的原始发布时间，毫秒',
+  status varchar(16) NOT NULL DEFAULT 'PENDING',
+  attempts int unsigned NOT NULL DEFAULT 0,
+  next_attempt_at bigint unsigned NOT NULL DEFAULT 0,
+  lease_until bigint unsigned NOT NULL DEFAULT 0,
+  claim_token varchar(32) DEFAULT NULL,
+  last_error varchar(1000) DEFAULT NULL,
+  create_time timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  update_time timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_feed_blog_user (blog_id,user_id),
+  KEY idx_feed_due (status,next_attempt_at,id),
+  KEY idx_feed_lease (status,lease_until,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关注动态持久化投递任务';
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -49,3 +49,15 @@ XGROUP CREATE stream.orders g1 $ MKSTREAM
 - 失败由数据库确认后自动补偿 Redis 库存和购买资格；重复消息不会重复补偿。已有另一笔成功订单时保留购买限制。
 - 商户、优惠券的公开查询不变，写入只允许管理员；启动前配置 `HMDP_ADMIN_USER_IDS=实际用户ID,另一个ID`，默认空名单拒绝管理写入。
 - 实现机制、升级边界及测试方法见 [秒杀模块文档](docs/seckill-order.md)。
+
+## 5. 用户关注
+
+关注、取关、状态查询及共同关注同步读写 MySQL。已有数据库使用 [关注索引增量迁移](sql/migrations/20261031_add_follow_user_target_unique.sql)，先检查实际表和历史重复关系；不要用含 DROP TABLE 的 `hmdp.sql` 升级已有库。
+
+接口、前端文件、幂等与并发边界及验证见 [关注模块说明](docs/follows.md)。本次前端改动保存在仓库 `frontend/`，未同步到外部 Nginx 目录。
+
+## 6. 关注动态 Feed
+
+发布笔记时，在同一个 MySQL 事务中创建笔记和粉丝投递任务，提交后推送到 `feed:{用户ID}` 收件箱。任务失败可自动重试，重复投递不更新原排序时间。`GET /blog/of/follow` 使用时间和同分偏移游标，每页 2 条。
+
+已有库先执行 [Feed 增量迁移](sql/migrations/20261031_add_feed_delivery_task.sql)。请求链路、重试维护、分页例子、前端文件及性能边界见 [Feed 模块说明](docs/feed.md)。

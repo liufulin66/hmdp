@@ -29,6 +29,7 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+    com.hmdp.mapper.FeedDeliveryTaskMapper: info
 hmdp:
   admin:
     # 配置已存在用户的 ID，例如环境变量 HMDP_ADMIN_USER_IDS=1,2；默认禁止管理写入。

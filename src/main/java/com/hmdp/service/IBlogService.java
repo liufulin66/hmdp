@@ -28,4 +28,6 @@ public interface IBlogService extends IService<Blog> {
 
     Result queryBlogById(Long id);
 
+    Result queryBlogOfFollow(Long lastId, Integer offset);
+
 }

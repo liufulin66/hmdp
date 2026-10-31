@@ -47,6 +47,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource 
     private StringRedisTemplate stringRedisTemplate;
 
+    @Override
+    public Result queryUserById(Long id) {
+        if (id == null || id <= 0) return Result.fail("用户ID必须为正数");
+        User user = getById(id);
+        if (user == null) return Result.fail("目标用户不存在");
+        return Result.ok(BeanUtil.copyProperties(user, UserDTO.class));
+    }
+
     
     @Override
     public Result sendCode(String phone, HttpSession session) {

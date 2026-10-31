@@ -26,6 +26,11 @@
       .el-tabs__content {
           height: 90%;
       }
+      .feed-controls, .feed-status { width: 90%; padding: 10px 0; text-align: center; }
+      .feed-controls { display: flex; justify-content: space-between; align-items: center; }
+      .blog-list { align-content: flex-start; }
+      .feed-like { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+      button:disabled { opacity: .6; cursor: wait; }
   </style>
 
 </head>
@@ -69,15 +74,19 @@
       </el-tab-pane>
       <el-tab-pane label="评价" name="2">评价</el-tab-pane>
       <el-tab-pane label="粉丝(0)" name="3">粉丝(0)</el-tab-pane>
-      <el-tab-pane label="关注(0)" name="4">
+      <el-tab-pane label="关注" name="4">
         <div class="blog-list" @scroll="onScroll">
+          <div class="feed-controls">
+            <span>关注的人的笔记</span>
+            <button type="button" :disabled="feedRefreshing" @click="queryBlogsOfFollow(true)">刷新</button>
+          </div>
           <div class="blog-box" v-for="b in blogs2" :key="b.id">
             <div class="blog-img2" @click="toBlogDetail(b)"><img :src="b.img" alt=""></div>
             <div class="blog-title">{{b.title}}</div>
             <div class="blog-foot">
               <div class="blog-user-icon"><img :src="b.icon || '/imgs/icons/default-icon.png'" alt=""></div>
               <div class="blog-user-name">{{b.name}}</div>
-              <div class="blog-liked" @click="addLike(b)">
+              <button type="button" class="blog-liked feed-like" :disabled="b.likePending" @click="addLike(b)">
                 <svg t="1646634642977" class="icon" viewBox="0 0 1024 1024" version="1.1"
                      xmlns="http://www.w3.org/2000/svg" p-id="2187" width="14" height="14">
                   <path
@@ -85,8 +94,18 @@
                       p-id="2188" :fill="b.isLike ? '#ff6633' : '#82848a'"></path>
                 </svg>
                 {{b.liked}}
-              </div>
+              </button>
             </div>
+          </div>
+          <div class="feed-status" aria-live="polite">
+            <span v-if="feedPending">正在加载动态…</span>
+            <template v-else-if="feedError">
+              <span>{{feedError}}</span>
+              <button type="button" @click="queryBlogsOfFollow()">重试</button>
+            </template>
+            <span v-else-if="feedLoaded && feedEnded && !blogs2.length">暂无关注动态</span>
+            <span v-else-if="feedEnded">已经到底了</span>
+            <button v-else-if="feedLoaded" type="button" @click="queryBlogsOfFollow()">加载更多</button>
           </div>
         </div>
       </el-tab-pane>
@@ -98,8 +117,9 @@
 <script src="./js/axios.min.js"></script>
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
-<script src="./js/common.js"></script>
+<script src="./js/common.js?v=20261031-1"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
+<script src="./js/feed.js?v=20261031-1"></script>
 <script src="./js/footer.js"></script>
 <script>
   const app = new Vue({
@@ -109,13 +129,16 @@
       activeName: "1",
       info: {},
       blogs: [],
-      blogs2: [], // 关注的人的播客
+      blogs2: [], // 关注的人的笔记
       params: {
         minTime: 0, // 上一次拉取到的时间戳
         offset: 0, // 偏移量
       },
-      count: 5,
-      isReachBottom: false,
+      feedPending: false,
+      feedRefreshing: false,
+      feedEnded: false,
+      feedLoaded: false,
+      feedError: "",
     },
     created() {
       this.queryUser();
@@ -125,35 +148,19 @@
     },
     beforeDestroy() {
       if (this.stopLikeSync) this.stopLikeSync();
+      feed.destroy(this);
     },
     methods: {
-      load() {
-        this.count += 2;
-      },
       queryBlogs() {
         axios.get("/blog/of/me")
           .then(({data}) => this.blogs = data)
           .catch(this.$message.error)
       },
       queryBlogsOfFollow(clear) {
-        if (clear) {
-          this.params.offset = 0;
-          this.params.minTime = new Date().getTime() + 1;
-        }
-        let {minTime, offset: os} = this.params;
-        axios.get("/blog/of/follow", {
-            params: {offset: os, lastId: minTime || new Date().getTime() + 1}
-          })
-          .then(({data}) => {
-            if (!data) {
-              return;
-            }
-            let {list, ...params} = data;
-            list.forEach(b => b.img = b.images.split(",")[0])
-            this.blogs2 = clear ? list : this.blogs2.concat(list);
-            this.params = params;
-          })
-          .catch(e => console.log(e))
+        return feed.load(this, clear);
+      },
+      toBlogDetail(blog) {
+        location.href = "/blog-detail.html?id=" + blog.id + "&v=20261031-1";
       },
       queryUser() {
         // 查询用户信息
@@ -218,19 +225,11 @@
           .catch(err => this.$message.error(err))
       },
       onScroll(e) {
+        if (this.activeName !== '4') return;
         let scrollTop = e.target.scrollTop;
         let offsetHeight = e.target.offsetHeight;
         let scrollHeight = e.target.scrollHeight;
-        if (scrollTop === 0) {
-          // 到顶部了，查询一次
-          this.queryBlogsOfFollow(true);
-        } else if (scrollTop + offsetHeight + 1 > scrollHeight && !this.isReachBottom) {
-          this.isReachBottom = true
-          // 再次查询下一页数据
-          this.queryBlogsOfFollow();
-        } else {
-          this.isReachBottom = false
-        }
+        if (scrollTop + offsetHeight + 2 >= scrollHeight) return this.queryBlogsOfFollow();
       }
     },
 

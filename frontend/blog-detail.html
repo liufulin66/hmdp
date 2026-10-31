@@ -20,6 +20,8 @@
     .liked{
 
     }
+    .follow-button { border: 0; font: inherit; }
+    .follow-button:disabled { opacity: .6; cursor: wait; }
   </style>
 </head>
 <body>
@@ -47,9 +49,10 @@
         <span class="time">{{formatTime(new Date(blog.createTime))}}</span>
       </div>
       <div style="width: 20%">
-        <div class="logout-btn" @click="follow" v-show="!user || user.id !== blog.userId ">
-          {{followed ? '取消关注' : '关注'}}
-        </div>
+        <button type="button" class="logout-btn follow-button" @click="follow"
+                :disabled="followPending || !blog.userId" v-show="!user || user.id !== blog.userId">
+          {{followButtonText()}}
+        </button>
       </div>
 
     </div>
@@ -152,8 +155,9 @@
 <script src="./js/axios.min.js"></script>
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
-<script src="./js/common.js"></script>
+<script src="./js/common.js?v=20261031-1"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
+<script src="./js/follows.js?v=20261031-1"></script>
 <script>
   let each = function (ary, callback) {
     for (let i = 0, l = ary.length; i < l; i++) {
@@ -169,6 +173,9 @@
       likes: [],
       user: {}, // 登录用户
       followed: false, // 是否关注了
+      followPending: false,
+      followReady: false,
+      followRetryIntent: null,
       _width: 0,
       duration: 300,
       container: null,
@@ -249,17 +256,13 @@
           .catch(err => this.$message.error(err.message || err));
       },
       isFollowed(){
-        axios.get("/follow/or/not/" + this.blog.userId)
-          .then(({data}) => this.followed = data)
-          .catch(this.$message.error)
+        return follows.refresh(this, this.blog.userId);
       },
       follow(){
-        axios.put("/follow/" + this.blog.userId + "/" + !this.followed)
-          .then(() => {
-            this.$message.success(this.followed ? "已取消关注" : "已关注")
-            this.followed = !this.followed
-          })
-          .catch(this.$message.error)
+        return follows.toggle(this, this.blog.userId);
+      },
+      followButtonText(){
+        return follows.label(this);
       },
       formatTime(b) {
         return b.getFullYear() + "年" + (b.getMonth() + 1) + "月" + b.getDate() + "日 ";
