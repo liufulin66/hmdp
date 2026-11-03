@@ -36,8 +36,8 @@ axios.interceptors.response.use(function (response) {
 axios.defaults.paramsSerializer = function(params) {
   let p = "";
   Object.keys(params).forEach(k => {
-    if(params[k]){
-      p = p + "&" + k + "=" + params[k]
+    if(params[k] !== undefined && params[k] !== null && params[k] !== ''){
+      p = p + "&" + encodeURIComponent(k) + "=" + encodeURIComponent(params[k])
     }
   })
   return p;

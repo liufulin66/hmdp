@@ -20,4 +20,6 @@ public interface IShopService extends IService<Shop> {
 
     Result saveShop(Shop shop);
 
+    Result queryShopByType(Long typeId, Integer current, Double x, Double y, Integer radius, boolean pageInfo);
+
 }

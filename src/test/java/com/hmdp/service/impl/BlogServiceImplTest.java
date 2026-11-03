@@ -1,16 +1,20 @@
 package com.hmdp.service.impl;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.User;
+import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IUserService;
 import com.hmdp.repository.FeedRedisRepository;
+import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
@@ -22,6 +26,8 @@ import static org.mockito.Mockito.*;
 class BlogServiceImplTest {
     private BlogServiceImpl service;
     private IUserService userService;
+    private BlogLikeService blogLikeService;
+    private BlogMapper blogMapper;
     private BlogPublicationService publication;
     private FeedDeliveryService delivery;
     private FeedRedisRepository inbox;
@@ -31,8 +37,11 @@ class BlogServiceImplTest {
         UserHolder.removeUser();
         service = spy(new BlogServiceImpl());
         userService = mock(IUserService.class);
+        blogLikeService = mock(BlogLikeService.class);
+        blogMapper = mock(BlogMapper.class);
         ReflectionTestUtils.setField(service, "userService", userService);
-        ReflectionTestUtils.setField(service, "blogLikeService", mock(BlogLikeService.class));
+        ReflectionTestUtils.setField(service, "blogLikeService", blogLikeService);
+        ReflectionTestUtils.setField(service, "baseMapper", blogMapper);
         publication = mock(BlogPublicationService.class);
         delivery = mock(FeedDeliveryService.class);
         inbox = mock(FeedRedisRepository.class);
@@ -166,6 +175,62 @@ class BlogServiceImplTest {
         assertEquals(List.of(), end.getList());
         assertEquals(0L, end.getMinTime());
         assertEquals(0, end.getOffset());
+    }
+
+    @Test
+    void userBlogListRejectsInvalidTargetsAndMissingUsersBeforeQueryingNotes() {
+        assertFalse(service.queryBlogOfUser(null, 1).getSuccess());
+        assertFalse(service.queryBlogOfUser(0L, 1).getSuccess());
+        assertFalse(service.queryBlogOfUser(-1L, 1).getSuccess());
+        assertFalse(service.queryBlogOfUser(2L, null).getSuccess());
+        assertFalse(service.queryBlogOfUser(2L, 0).getSuccess());
+        assertFalse(service.queryBlogOfUser(2L, 1001).getSuccess());
+        verifyNoInteractions(blogMapper);
+        when(userService.getById(9L)).thenReturn(null);
+        Result missing = service.queryBlogOfUser(9L, 1);
+        assertFalse(missing.getSuccess());
+        assertEquals("用户不存在", missing.getErrorMsg());
+        verifyNoInteractions(blogMapper);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void userBlogListPagesByTheTargetUserAndFillsAuthorOnceAndLikesPerNote() {
+        User author = new User().setId(9L).setNickName("作者").setIcon("author.png");
+        when(userService.getById(9L)).thenReturn(author);
+        Blog newer = new Blog().setId(12L).setUserId(9L);
+        Blog older = new Blog().setId(11L).setUserId(9L);
+        Page<Blog> page = new Page<>(2, SystemConstants.MAX_PAGE_SIZE);
+        page.setRecords(List.of(newer, older));
+        when(blogMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        Result result = service.queryBlogOfUser(9L, 2);
+
+        assertTrue(result.getSuccess());
+        assertEquals(List.of(newer, older), result.getData());
+        assertEquals("作者", newer.getName());
+        assertEquals("author.png", older.getIcon());
+        verify(userService, times(1)).getById(9L);
+        verify(blogLikeService, times(2)).fillLikes(any(Blog.class));
+        ArgumentCaptor<Page<Blog>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        verify(blogMapper).selectPage(pageCaptor.capture(), any());
+        assertEquals(2, pageCaptor.getValue().getCurrent());
+        assertEquals(SystemConstants.MAX_PAGE_SIZE, pageCaptor.getValue().getSize());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void existingUserWithoutNotesReturnsAnEmptyArray() {
+        when(userService.getById(4L)).thenReturn(new User().setId(4L).setNickName("empty"));
+        Page<Blog> page = new Page<>(1, SystemConstants.MAX_PAGE_SIZE);
+        page.setRecords(List.of());
+        when(blogMapper.selectPage(any(Page.class), any())).thenReturn(page);
+
+        Result result = service.queryBlogOfUser(4L, 1);
+
+        assertTrue(result.getSuccess());
+        assertEquals(List.of(), result.getData());
+        verify(blogLikeService, never()).fillLikes(any(Blog.class));
     }
 
     private void login(long id) {

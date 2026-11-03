@@ -1,5 +1,6 @@
 package com.hmdp.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
@@ -131,6 +132,25 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
         page.getRecords().forEach(blogLikeService::fillLikes);
         return Result.ok(page.getRecords());
+    }
+
+    @Override
+    public Result queryBlogOfUser(Long id, Integer current) {
+        if (id == null || id <= 0) return Result.fail("用户ID必须为正数");
+        if (current == null || current < 1 || current > 1000) return Result.fail("页码必须在1到1000之间");
+        User author = userService.getById(id);
+        if (author == null) return Result.fail("用户不存在");
+        Page<Blog> page = baseMapper.selectPage(new Page<>(current, SystemConstants.MAX_PAGE_SIZE),
+                new LambdaQueryWrapper<Blog>().eq(Blog::getUserId, id)
+                        .orderByDesc(Blog::getCreateTime).orderByDesc(Blog::getId));
+        List<Blog> records = page.getRecords();
+        // 同一作者只查询一次资料，避免每条笔记重复查用户。
+        for (Blog blog : records) {
+            blog.setName(author.getNickName());
+            blog.setIcon(author.getIcon());
+        }
+        records.forEach(blogLikeService::fillLikes);
+        return Result.ok(records);
     }
 
     @Override

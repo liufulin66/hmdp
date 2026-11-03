@@ -1,4 +1,4 @@
-# 点赞、关注与动态前端文件
+# 点赞、关注、动态与附近商铺前端文件
 
 本目录保存配套黑马点评前端的页面和共享脚本。本次关注改动仅在仓库中完成，尚未部署。以后使用时以教程前端资源为基础，把下面文件复制到 Nginx 的 `html/hmdp/`，保留原有 `css/`、`imgs/`、Vue、axios、Element UI 和其他页面：
 
@@ -12,6 +12,10 @@
 | `js/follows.js` | `js/follows.js` |
 | `js/common.js` | `js/common.js` |
 | `js/feed.js` | `js/feed.js` |
+| `shop-list.html` | `shop-list.html` |
+| `css/shop-list.css` | `css/shop-list.css` |
+| `js/shop-nearby.js` | `js/shop-nearby.js` |
+| `js/blog-comments.js` | `js/blog-comments.js` |
 
 页面根据当前用户状态发送 PUT 点赞或 DELETE 取消点赞，并使用接口返回的总数和状态更新界面。浏览器从历史缓存返回时，重新查询已展示笔记的点赞状态，保留分页和滚动位置。
 
@@ -27,6 +31,12 @@ node --test frontend/tests/*.test.cjs
 
 关注按钮通过 `follows.js` 发送带固定 true/false 意图的 PUT，pending 期间禁用按钮，成功应用返回布尔值，失败重查并保留原意图供重试。`common.js` 保留原有登录跳转，并处理超时等没有 `response` 的网络错误。
 
-`other-info.html` 复用已有“共同关注”标签，按用户 ID 升序每页 5 位，使用 `current` 分页，最多第 1000 页。原“笔记”标签的 `/blog/of/user` 接口尚未实现，不属于本次范围。完整请求链路与限制见 [关注模块说明](../docs/follows.md)。
+`other-info.html` 复用已有“共同关注”标签，按用户 ID 升序每页 5 位，使用 `current` 分页，最多第 1000 页。“笔记”标签使用已实现的 `GET /blog/of/user?id=<目标用户ID>&current=<页码>`，按笔记时间与 ID 倒序分页，支持首次加载、加载更多、空列表和失败重试。完整请求链路与限制见 [关注模块说明](../docs/follows.md)。
 
 `info.html` 的“关注”标签显示笔记动态，使用 `feed.js` 按 minTime/offset 滚动分页，每页 2 条。支持刷新、加载互斥、旧响应过滤、失败重试、空列表及结束状态，并保留点赞逻辑。详情见 [Feed 模块说明](../docs/feed.md)。本次未同步到外部 Nginx 目录。
+
+`shop-list.html` 与原样式来自外部 Nginx 的现有页面，已按确认纳入仓库；本次没有写回外部目录。列表默认普通分类，可主动选择明确标注的教程演示位置或输入与商铺同源的坐标。没有使用写死坐标冒充真实定位；坐标系未知时不接入浏览器 GPS。
+
+`shop-nearby.js` 请求 `pageInfo=true`，支持半径/分类/坐标变化重置分页、加载互斥、旧响应失效、错误重试、空结果/结束状态及米/公里距离展示。新版 `common.js` 保留合法 0 坐标并编码参数。本版不提供未实现的人气/评分排序。使用前先完成数据库迁移及管理员 GEO 初始化，见 [附近商铺说明](../docs/nearby-shops.md)。
+
+`blog-detail.html` 用 `blog-comments.js` 替换写死评论与数量，支持一级评论、回复、自删占位和独立滚动分页。超时重试保持原 requestId，编辑提交意图后使用新编号；代次与计数版本避免旧响应破坏当前结果。评论按普通文本渲染。使用前执行已核实的评论迁移；本次没有写回外部 Nginx 目录，见 [评论模块说明](../docs/blog-comments.md)。

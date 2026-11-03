@@ -22,6 +22,19 @@
     }
     .follow-button { border: 0; font: inherit; }
     .follow-button:disabled { opacity: .6; cursor: wait; }
+    .comment-composer { padding: 12px 0; }
+    .comment-composer textarea { width: 100%; min-height: 72px; box-sizing: border-box; padding: 8px; font: inherit; }
+    .comment-actions, .comment-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+    .comment-actions { justify-content: space-between; }
+    .comment-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 0; }
+    .comment-placeholder, .comment-meta { color: #777; font-size: 12px; }
+    .comment-replies { padding: 8px; background: #fafafa; margin-top: 8px; }
+    .comment-reply { border-bottom: 1px solid #eee; padding: 8px 0; }
+    .comment-status { padding: 12px 0; text-align: center; }
+    .comment-error { color: #b42318; }
+    .blog-comments button { padding: 4px 8px; cursor: pointer; }
+    .blog-comments button:disabled { opacity: .6; cursor: wait; }
+    .blog-error { margin: 12px; padding: 12px; color: #b42318; background: #fef3f2; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -31,7 +44,8 @@
     <div class="header-title"></div>
     <div class="header-share">...</div>
   </div>
-  <div style="height: 85%; overflow-y: scroll; overflow-x: hidden">
+  <div ref="detailScroll" style="height: 85%; overflow-y: scroll; overflow-x: hidden">
+    <div v-if="blogError" class="blog-error" role="alert">{{blogError}}</div>
     <div class="blog-info-box" ref="swiper"
          @touchstart="moveStart"
          @touchmove="moving"
@@ -66,7 +80,7 @@
         <div class="name">{{shop.name}}</div>
         <div>
           <el-rate
-              v-model="shop.score/10">
+              disabled :value="shop.score/10">
           </el-rate>
         </div>
           <div class="shop-avg">￥{{shop.avgPrice}}/人</div>
@@ -86,50 +100,65 @@
       </div>
     </div>
     <div class="blog-divider"></div>
-    <div class="blog-comments">
+    <div class="blog-comments" ref="commentsSection" v-if="!blogError">
       <div class="comments-head">
-        <div>网友评价 <span>（119）</span></div>
-        <div><i class="el-icon-arrow-right"></i></div>
+        <div>笔记评论 <span>（{{commentState.commentCount}}）</span></div>
+        <button type="button" :disabled="commentState.pending" @click="loadComments(true)">刷新评论</button>
+      </div>
+      <div class="comment-composer">
+        <div v-if="commentState.target">回复 {{commentState.target.name}}
+          <button type="button" :disabled="commentState.submitPending" @click="cancelCommentReply">取消回复</button>
+        </div>
+        <textarea ref="commentInput" v-model="commentState.draft" :disabled="commentState.submitPending"
+                  placeholder="分享你的看法，最多500个字符" aria-label="评论内容"></textarea>
+        <div class="comment-actions">
+          <span>{{Array.from(commentState.draft).length}} / 500</span>
+          <button type="button" :disabled="commentState.submitPending" @click="submitComment">
+            {{commentState.submitPending ? '正在提交…' : '发表评论'}}
+          </button>
+        </div>
+        <div v-if="commentState.submitError" class="comment-error" role="alert">{{commentState.submitError}}（草稿已保留，可重试）</div>
       </div>
       <div class="comment-list">
-        <div class="comment-box" v-for="i in 3" :key="i">
-          <div class="comment-icon">
-            <img
-                src="https://p0.meituan.net/userheadpicbackend/57e44d6eba01aad0d8d711788f30a126549507.jpg%4048w_48h_1e_1c_1l%7Cwatermark%3D0"
-                alt="">
-          </div>
+        <div class="comment-box" v-for="comment in commentState.list" :key="comment.id">
+          <div class="comment-icon"><img :src="comment.author.icon || '/imgs/icons/default-icon.png'" alt=""></div>
           <div class="comment-info">
-            <div class="comment-user">叶小乙 <span>Lv5</span></div>
-            <div style="display: flex;">
-              打分
-              <el-rate disabled v-model="4.5"></el-rate>
+            <div class="comment-user">{{comment.author.nickName}}</div>
+            <div class="comment-text" :class="{'comment-placeholder': comment.deleted}">{{comment.content}}</div>
+            <div class="comment-meta">
+              <span>{{comment.createTime}}</span>
+              <button v-if="canReplyTo(comment)" type="button" :disabled="commentState.submitPending" @click="replyToComment(comment)">回复</button>
+              <button v-if="comment.canDelete" type="button" :disabled="comment.deletePending || commentState.submitPending" @click="deleteComment(comment)">{{comment.deletePending ? '删除中…' : '删除'}}</button>
             </div>
-            <div style="padding: 5px 0; font-size: 14px">
-              某平台上买的券，价格可以当工作餐吃，虽然价格便宜，但是这家店一点都没有...
-            </div>
-            <div class="comment-images">
-              <img
-                  src="https://qcloud.dpfile.com/pc/6T7MfXzx7USPIkSy7jzm40qZSmlHUF2jd-FZUL6WpjE9byagjLlrseWxnl1LcbuSGybIjx5eX6WNgCPvcASYAw.jpg"
-                  alt="">
-              <img
-                  src="https://qcloud.dpfile.com/pc/sZ5q-zgglv4VXEWU71xCFjnLM_jUHq-ylq0GKivtrz3JksWQ1f7oBWZsxm1DWgcaGybIjx5eX6WNgCPvcASYAw.jpg"
-                  alt="">
-              <img
-                  src="https://qcloud.dpfile.com/pc/xZy6W4NwuRFchlOi43DVLPFsx7KWWvPqifE1JTe_jreqdsBYA9CFkeSm2ZlF0OVmGybIjx5eX6WNgCPvcASYAw.jpg"
-                  alt="">
-              <img
-                  src="https://qcloud.dpfile.com/pc/xZy6W4NwuRFchlOi43DVLPFsx7KWWvPqifE1JTe_jreqdsBYA9CFkeSm2ZlF0OVmGybIjx5eX6WNgCPvcASYAw.jpg"
-                  alt="">
-            </div>
-            <div>
-              浏览641 &nbsp;&nbsp;&nbsp;&nbsp;评论5
+            <button type="button" @click="toggleCommentReplies(comment)">
+              {{comment.replies.open ? '收起回复' : '查看回复'}}（{{comment.replyCount}}条有效回复）
+            </button>
+            <div class="comment-replies" v-if="comment.replies.open">
+              <div class="comment-reply" v-for="reply in comment.replies.list" :key="reply.id">
+                <div class="comment-user">{{reply.author.nickName}}<span v-if="reply.answerUser"> 回复 {{reply.answerUser.nickName}}</span></div>
+                <div class="comment-text" :class="{'comment-placeholder': reply.deleted}">{{reply.content}}</div>
+                <div class="comment-meta">
+                  <span>{{reply.createTime}}</span>
+                  <button v-if="canReplyTo(reply)" type="button" :disabled="commentState.submitPending" @click="replyToComment(reply)">回复</button>
+                  <button v-if="reply.canDelete" type="button" :disabled="reply.deletePending || commentState.submitPending" @click="deleteComment(reply)">{{reply.deletePending ? '删除中…' : '删除'}}</button>
+                </div>
+              </div>
+              <div class="comment-status" aria-live="polite">
+                <span v-if="comment.replies.pending">正在加载回复…</span>
+                <template v-else-if="comment.replies.error"><span>{{comment.replies.error}}</span><button type="button" @click="loadCommentReplies(comment)">重试</button></template>
+                <span v-else-if="comment.replies.loaded && !comment.replies.list.length && !comment.replies.hasMore">暂无回复</span>
+                <button v-else-if="comment.replies.hasMore" type="button" @click="loadCommentReplies(comment)">加载更多回复</button>
+                <span v-else>回复已加载完</span>
+              </div>
             </div>
           </div>
         </div>
-        <div
-            style="display: flex; justify-content: space-between;padding: 15px 0; border-top: 1px solid #f1f1f1; margin-top: 10px;">
-          <div>查看全部119条评价</div>
-          <div><i class="el-icon-arrow-right"></i></div>
+        <div class="comment-status" aria-live="polite">
+          <span v-if="commentState.pending">正在加载评论…</span>
+          <template v-else-if="commentState.error"><span>{{commentState.error}}</span><button type="button" @click="loadComments()">重试</button></template>
+          <span v-else-if="commentState.loaded && !commentState.list.length && !commentState.hasMore">暂无评论，来分享你的看法吧</span>
+          <button v-else-if="commentState.hasMore" type="button" @click="loadComments()">加载更多评论</button>
+          <span v-else-if="commentState.loaded">评论已加载完</span>
         </div>
       </div>
     </div>
@@ -147,7 +176,7 @@
     <div style="width: 40%">
     </div>
     <div class="foot-box">
-      <div class="foot-view"><i class="el-icon-chat-square"></i></div>
+      <div class="foot-view" @click="focusComment"><i class="el-icon-chat-square"></i><span>{{commentState.commentCount}}</span></div>
     </div>
   </div>
 </div>
@@ -155,9 +184,12 @@
 <script src="./js/axios.min.js"></script>
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
-<script src="./js/common.js?v=20261031-1"></script>
+<script src="./js/common.js?v=20261103-3"></script>
+<script src="./js/blog-links.js?v=20261103-3"></script>
+<script src="./js/blog-detail.js?v=20261103-3"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/follows.js?v=20261031-1"></script>
+<script src="./js/blog-comments.js?v=20261103-2"></script>
 <script>
   let each = function (ary, callback) {
     for (let i = 0, l = ary.length; i < l; i++) {
@@ -169,6 +201,10 @@
     data: {
       util,
       blog: {},
+      blogError: "",
+      focusCommentsOnLoad: false,
+      commentFocus: null,
+      commentState: blogComments.initial(),
       shop: {},
       likes: [],
       user: {}, // 登录用户
@@ -194,6 +230,12 @@
     },
     created() {
       let id = util.getUrlParam("id");
+      this.focusCommentsOnLoad = util.getUrlParam("focus") === "comments";
+      if (!/^[1-9][0-9]*$/.test(id)) {
+        this.blogError = "笔记ID无效";
+        this.$message.error(this.blogError);
+        return;
+      }
       this.queryBlogById(id);
     },
     mounted() {
@@ -201,8 +243,24 @@
     },
     beforeDestroy() {
       if (this.stopLikeSync) this.stopLikeSync();
+      if (this.commentFocus) this.commentFocus.cancel();
+      blogComments.destroy(this);
     },
     methods: {
+      loadComments(reset) { return blogComments.loadRoots(this, reset); },
+      loadCommentReplies(root) { return blogComments.loadReplies(this, root); },
+      toggleCommentReplies(root) { return blogComments.toggleReplies(this, root); },
+      canReplyTo(comment) { return blogComments.canReply(this, comment); },
+      replyToComment(comment) { if (blogComments.reply(this, comment)) this.focusComment(); },
+      cancelCommentReply() { return blogComments.cancelReply(this); },
+      submitComment() { return blogComments.submit(this); },
+      deleteComment(comment) { return blogComments.remove(this, comment); },
+      focusComment() {
+        if (this.blogError) return;
+        const section = this.$refs.commentsSection;
+        if (section && section.scrollIntoView) section.scrollIntoView({block: 'start', behavior: 'smooth'});
+        if (this.$refs.commentInput) this.$refs.commentInput.focus();
+      },
       init() {
         // 获得父容器节点
         this.container = this.$refs.swiper
@@ -223,20 +281,37 @@
         }
       },
       queryBlogById(id) {
-        axios.get("/blog/" + id)
+        const requestId = (this.blogRequestId || 0) + 1;
+        this.blogRequestId = requestId;
+        blogComments.attach(this, id);
+        axios.get("/blog/" + encodeURIComponent(id))
           .then(({data}) => {
-            data.images = data.images.split(",")
+            if (this.blogRequestId !== requestId) return;
+            data.images = String(data.images || "").split(",").filter(Boolean);
             this.blog = data;
-            this.$nextTick(this.init);
+            this.blogError = "";
+            if (this.commentState.loaded || this.commentState.countVersion !== '0') this.blog.comments = this.commentState.commentCount;
+            this.$nextTick(() => {
+              this.init();
+              // 只滚动到评论区，不聚焦输入框，避免手机上自动弹出键盘。
+              if (this.focusCommentsOnLoad) this.commentFocus = blogDetail.focusComments(this);
+            });
             this.queryShopById(data.shopId)
             this.queryLikeList(id);
             this.queryLoginUser();
           })
-          .catch(this.$message.error)
+          .catch(err => {
+            if (this.blogRequestId !== requestId) return;
+            this.blogError = String(err && err.message || err || "笔记加载失败");
+            this.$message.error(this.blogError);
+          })
       },
       queryShopById(shopId) {
+        const requestId = (this.shopRequestId || 0) + 1;
+        this.shopRequestId = requestId;
         axios.get("/shop/" + shopId)
           .then(({data}) => {
+            if (this.shopRequestId !== requestId || String(this.blog.shopId) !== String(shopId)) return;
             data.image = data.images.split(",")[0]
             this.shop = data
           })

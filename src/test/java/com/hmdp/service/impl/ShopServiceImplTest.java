@@ -3,6 +3,9 @@ package com.hmdp.service.impl;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
+import com.hmdp.entity.ShopType;
+import com.hmdp.mapper.ShopMapper;
+import com.hmdp.mapper.ShopTypeMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.CacheBusyException;
@@ -55,7 +58,16 @@ class ShopServiceImplTest {
         lock = mock(RLock.class);
         when(redisson.getLock(anyString())).thenReturn(lock);
         ReflectionTestUtils.setField(service, "cacheClient", new CacheClient(redis, redisson));
-        shop = new Shop().setId(1L).setName("测试商户");
+        shop = new Shop().setId(1L).setName("测试商户").setTypeId(1L).setX(0D).setY(0D).setGeoVersion(0L);
+        ShopMapper mapper=mock(ShopMapper.class);
+        when(mapper.lockById(1L)).thenReturn(shop);
+        when(mapper.bumpGeoVersion(1L)).thenReturn(1);
+        when(mapper.selectById(1L)).thenReturn(shop);
+        ReflectionTestUtils.setField(service,"baseMapper",mapper);
+        ShopTypeMapper types=mock(ShopTypeMapper.class);
+        when(types.selectById(1L)).thenReturn(new ShopType().setId(1L));
+        ReflectionTestUtils.setField(service,"shopTypes",types);
+        ReflectionTestUtils.setField(service,"geoSync",mock(ShopGeoSyncService.class));
     }
 
     @Test

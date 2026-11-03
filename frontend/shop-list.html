@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>黑马点评 · 商铺</title>
+  <link rel="stylesheet" href="./css/element.css">
+  <link rel="stylesheet" href="./css/shop-list.css?v=20261101-1">
+  <link rel="stylesheet" href="./css/main.css">
+  <style>
+    #app { height: 100%; display: flex; flex-direction: column; }
+    .header { min-height: 48px; height: 48px; flex-shrink: 0; }
+    .sort-bar { min-height: 40px; height: auto; padding: 6px 0; flex-shrink: 0; }
+    .location-controls { background: white; padding: 10px; font-size: 13px; }
+    .location-controls button, .location-controls select { margin: 4px; padding: 5px; }
+    .location-status { line-height: 1.6; color: #666; }
+    .coordinate-inputs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+    .coordinate-inputs input { width: 115px; padding: 5px; }
+    .shop-list { flex: 1; min-height: 0; height: auto; }
+    .list-status { padding: 16px; text-align: center; color: #666; }
+    button:disabled { opacity: .6; cursor: wait; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div class="header-back-btn" @click="goBack"><i class="el-icon-arrow-left"></i></div>
+    <div class="header-title">{{typeName || '商铺'}}</div><div class="header-search"></div>
+  </div>
+  <div class="sort-bar">
+    <el-dropdown trigger="click" @command="changeType">
+      <span>{{typeName || '选择分类'}} <i class="el-icon-arrow-down"></i></span>
+      <el-dropdown-menu slot="dropdown">
+        <el-dropdown-item v-for="type in types" :key="type.id" :command="type">{{type.name}}</el-dropdown-item>
+      </el-dropdown-menu>
+    </el-dropdown>
+    <span>{{locationMode === 'classification' ? '分类浏览' : '距离由近到远'}}</span>
+    <label>范围 <select v-model.number="params.radius" @change="queryShops(true)">
+      <option :value="1000">1公里</option><option :value="3000">3公里</option>
+      <option :value="5000">5公里</option><option :value="10000">10公里</option><option :value="20000">20公里</option>
+    </select></label>
+  </div>
+  <div class="location-controls">
+    <div class="location-status" aria-live="polite">
+      <span v-if="locationMode === 'classification'">普通分类（未使用定位）</span>
+      <span v-else-if="locationMode === 'demo'">教程演示位置：杭州；这不是您的实际位置</span>
+      <span v-else>使用输入的同源坐标：{{params.x}}, {{params.y}}</span>
+    </div>
+    <button type="button" @click="ordinary">普通分类</button>
+    <button type="button" @click="demo">使用教程演示位置</button>
+    <button type="button" :disabled="pending" @click="queryShops(true)">刷新</button>
+    <details>
+      <summary>输入与商铺相同坐标系的位置</summary>
+      <p>商铺坐标系来源待确认，暂不接入真实GPS定位。请确认输入坐标与商铺同源。</p>
+      <div class="coordinate-inputs">
+        <label>经度 <input v-model="coordinateX" inputmode="decimal" aria-label="经度"></label>
+        <label>纬度 <input v-model="coordinateY" inputmode="decimal" aria-label="纬度"></label>
+        <button type="button" @click="manual">应用坐标</button>
+      </div>
+    </details>
+  </div>
+  <div class="shop-list" @scroll="onScroll">
+    <div class="shop-box" v-for="shop in shops" :key="shop.id" @click="toDetail(shop.id)">
+      <div class="shop-img"><img :src="shop.img" :alt="shop.name"></div>
+      <div class="shop-info">
+        <div class="shop-title shop-item">{{shop.name}}</div>
+        <div class="shop-rate shop-item"><el-rate disabled :value="shop.score/10" text-color="#F63" show-score></el-rate><span>{{shop.comments}}条</span></div>
+        <div class="shop-area shop-item"><span>{{shop.area}}</span><span v-if="shop.distance != null">{{formatDistance(shop.distance)}}</span></div>
+        <div class="shop-avg shop-item">￥{{shop.avgPrice}}/人</div>
+        <div class="shop-address shop-item"><i class="el-icon-map-location"></i><span>{{shop.address}}</span></div>
+      </div>
+    </div>
+    <div class="list-status" aria-live="polite">
+      <span v-if="pending">正在加载商铺…</span>
+      <template v-else-if="error"><span>{{error}}</span> <button type="button" @click="queryShops()">重试</button></template>
+      <span v-else-if="loaded && !shops.length && !hasMore">暂无符合条件的商铺</span>
+      <span v-else-if="loaded && !hasMore">本次查询已结束（最多展示20页）</span>
+      <button v-else-if="loaded" type="button" @click="queryShops()">加载更多</button>
+    </div>
+  </div>
+</div>
+<script src="./js/vue.js"></script><script src="./js/axios.min.js"></script><script src="./js/element.js"></script>
+<script src="./js/common.js?v=20261101-1"></script><script src="./js/shop-nearby.js?v=20261101-1"></script>
+<script>
+  const app = new Vue({
+    el: '#app',
+    data: {types: [], shops: [], typeName: '', locationMode: 'classification', coordinateX: '', coordinateY: '',
+      pending: false, loaded: false, hasMore: true, error: '', params: {typeId: null, current: 1, radius: 5000, x: null, y: null}},
+    created() {
+      this.params.typeId = util.getUrlParam('type'); this.typeName = util.getUrlParam('name');
+      axios.get('/shop-type/list').then(({data}) => this.types = data).catch(error => this.$message.error(error));
+      this.queryShops();
+    },
+    beforeDestroy() { shopNearby.destroy(this); },
+    methods: {
+      queryShops(reset) { return shopNearby.load(this, reset); },
+      changeType(type) { this.params.typeId = type.id; this.typeName = type.name; return this.queryShops(true); },
+      ordinary() { return shopNearby.coordinates(this, 'classification'); },
+      demo() { return shopNearby.coordinates(this, 'demo', 120.149993, 30.334229); },
+      manual() { return shopNearby.coordinates(this, 'manual', this.coordinateX, this.coordinateY); },
+      formatDistance: shopNearby.distance,
+      goBack() { history.back(); },
+      toDetail(id) { location.href = '/shop-detail.html?id=' + encodeURIComponent(id); },
+      onScroll(event) { const element = event.target; if (element.scrollTop + element.clientHeight + 2 >= element.scrollHeight) this.queryShops(); }
+    }
+  });
+</script>
+</body>
+</html>

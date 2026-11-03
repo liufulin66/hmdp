@@ -31,6 +31,14 @@
       .blog-list { align-content: flex-start; }
       .feed-like { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
       button:disabled { opacity: .6; cursor: wait; }
+      .blog-item, .blog-box { cursor: pointer; }
+      .blog-item a, .blog-box a { color: inherit; text-decoration: none; }
+      .blog-item .blog-img, .blog-box .blog-img2, .blog-title { display: block; }
+      .blog-comments { display: inline-flex; align-items: center; gap: 2px; cursor: pointer; }
+      .blog-foot .blog-user-name { width: auto; flex: 1 1 auto; min-width: 0; }
+      .blog-foot .blog-liked { width: auto; flex: 0 0 auto; }
+      .blog-foot .blog-comments { flex: 0 0 auto; margin-left: 6px; }
+      .blog-item a:focus-visible, .blog-box a:focus-visible, .feed-like:focus-visible { outline: 2px solid #ff6633; outline-offset: 2px; }
   </style>
 
 </head>
@@ -63,12 +71,12 @@
   <div class="content">
     <el-tabs v-model="activeName" @tab-click="handleClick">
       <el-tab-pane label="笔记" name="1">
-        <div v-for="b in blogs" :key="b.id" class="blog-item">
-          <div class="blog-img"><img :src="b.images.split(',')[0]" alt=""></div>
+        <div v-for="b in blogs" :key="b.id" class="blog-item" @click="openBlog(b)">
+          <a class="blog-img" :href="blogUrl(b)" :aria-label="b.title || '查看笔记详情'" @click.stop><img :src="b.images.split(',')[0]" alt=""></a>
           <div class="blog-info">
-            <div class="blog-title">{{b.title}}</div>
+            <a class="blog-title" :href="blogUrl(b)" @click.stop>{{b.title}}</a>
             <div class="blog-liked"><img src="/imgs/thumbup.png" alt=""> {{b.liked}}</div>
-            <div class="blog-comments"><i class="el-icon-chat-dot-round"></i> {{b.comments}}</div>
+            <a class="blog-comments" :href="commentUrl(b)" @click.stop :aria-label="'查看评论，共' + (b.comments == null ? 0 : b.comments) + '条'"><i class="el-icon-chat-dot-round"></i> {{b.comments == null ? 0 : b.comments}}</a>
           </div>
         </div>
       </el-tab-pane>
@@ -80,13 +88,13 @@
             <span>关注的人的笔记</span>
             <button type="button" :disabled="feedRefreshing" @click="queryBlogsOfFollow(true)">刷新</button>
           </div>
-          <div class="blog-box" v-for="b in blogs2" :key="b.id">
-            <div class="blog-img2" @click="toBlogDetail(b)"><img :src="b.img" alt=""></div>
-            <div class="blog-title">{{b.title}}</div>
+          <div class="blog-box" v-for="b in blogs2" :key="b.id" @click="openBlog(b)">
+            <a class="blog-img2" :href="blogUrl(b)" :aria-label="b.title || '查看笔记详情'" @click.stop><img :src="b.img" alt=""></a>
+            <a class="blog-title" :href="blogUrl(b)" @click.stop>{{b.title}}</a>
             <div class="blog-foot">
               <div class="blog-user-icon"><img :src="b.icon || '/imgs/icons/default-icon.png'" alt=""></div>
               <div class="blog-user-name">{{b.name}}</div>
-              <button type="button" class="blog-liked feed-like" :disabled="b.likePending" @click="addLike(b)">
+              <button type="button" class="blog-liked feed-like" :disabled="b.likePending" @click.stop="addLike(b)">
                 <svg t="1646634642977" class="icon" viewBox="0 0 1024 1024" version="1.1"
                      xmlns="http://www.w3.org/2000/svg" p-id="2187" width="14" height="14">
                   <path
@@ -95,6 +103,9 @@
                 </svg>
                 {{b.liked}}
               </button>
+              <a class="blog-comments" :href="commentUrl(b)" @click.stop :aria-label="'查看评论，共' + (b.comments == null ? 0 : b.comments) + '条'">
+                <i class="el-icon-chat-dot-round"></i> {{b.comments == null ? 0 : b.comments}}
+              </a>
             </div>
           </div>
           <div class="feed-status" aria-live="polite">
@@ -117,7 +128,8 @@
 <script src="./js/axios.min.js"></script>
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
-<script src="./js/common.js?v=20261031-1"></script>
+<script src="./js/common.js?v=20261103-3"></script>
+<script src="./js/blog-links.js?v=20261103-3"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/feed.js?v=20261031-1"></script>
 <script src="./js/footer.js"></script>
@@ -159,8 +171,17 @@
       queryBlogsOfFollow(clear) {
         return feed.load(this, clear);
       },
+      blogUrl(blog) {
+        return blogLinks.detailUrl(blog && blog.id);
+      },
+      commentUrl(blog) {
+        return blogLinks.detailUrl(blog && blog.id, true);
+      },
+      openBlog(blog) {
+        return blogLinks.open(blog && blog.id);
+      },
       toBlogDetail(blog) {
-        location.href = "/blog-detail.html?id=" + blog.id + "&v=20261031-1";
+        return this.openBlog(blog);
       },
       queryUser() {
         // 查询用户信息

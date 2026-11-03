@@ -10,6 +10,8 @@ import lombok.experimental.Accessors;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 
 /**
  * <p>
@@ -80,6 +82,10 @@ public class Blog implements Serializable {
      * 评论数量
      */
     private Integer comments;
+
+    @JsonIgnore
+    @TableField(updateStrategy = FieldStrategy.NEVER)
+    private Long commentVersion;
 
     /**
      * 创建时间

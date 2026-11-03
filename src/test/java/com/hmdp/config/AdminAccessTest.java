@@ -5,6 +5,11 @@ import com.hmdp.dto.BlogLikeStatus;
 import com.hmdp.controller.BlogController;
 import com.hmdp.controller.FollowController;
 import com.hmdp.controller.UserController;
+import com.hmdp.controller.BlogCommentsController;
+import com.hmdp.service.IBlogCommentsService;
+import com.hmdp.dto.CommentPage;
+import com.hmdp.controller.ShopGeoController;
+import com.hmdp.service.impl.ShopGeoBuildService;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.dto.ScrollResult;
 import com.hmdp.entity.Blog;
@@ -106,6 +111,7 @@ class AdminAccessTest {
         mvc.perform(put("/blog/like/1")).andExpect(status().isUnauthorized());
         mvc.perform(delete("/blog/like/1")).andExpect(status().isUnauthorized());
         mvc.perform(get("/blog/of/me")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/blog/of/user?id=9")).andExpect(status().isUnauthorized());
         verifyNoInteractions(context.getBean(IBlogService.class));
     }
 
@@ -116,6 +122,7 @@ class AdminAccessTest {
         when(blogs.likeBlog(1L)).thenReturn(Result.ok(new BlogLikeStatus(11, true)));
         when(blogs.unlikeBlog(1L)).thenReturn(Result.ok(new BlogLikeStatus(10, false)));
         when(blogs.queryMyBlog(1)).thenReturn(Result.ok(java.util.List.of()));
+        when(blogs.queryBlogOfUser(9L, 1)).thenReturn(Result.ok(java.util.List.of()));
 
         mvc.perform(post("/blog").header("authorization", "member")
                         .contentType("application/json").content("{}"))
@@ -130,9 +137,25 @@ class AdminAccessTest {
                 .andExpect(jsonPath("$.data.isLike").value(false));
         mvc.perform(get("/blog/of/me").header("authorization", "member"))
                 .andExpect(status().isOk());
+        mvc.perform(get("/blog/of/user?id=9").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").isArray());
         verify(blogs).likeBlog(1L);
         verify(blogs).unlikeBlog(1L);
         verify(blogs).queryMyBlog(1);
+        verify(blogs).queryBlogOfUser(9L, 1);
+    }
+
+    @Test
+    void userBlogRouteRequiresLoginAndValidatesTargetAndPage() throws Exception {
+        IBlogService blogs = context.getBean(IBlogService.class);
+        mvc.perform(get("/blog/of/user?id=9")).andExpect(status().isUnauthorized());
+        when(blogs.queryBlogOfUser(9L, 2)).thenReturn(Result.ok(java.util.List.of()));
+        mvc.perform(get("/blog/of/user?id=9&current=2").header("authorization", "member"))
+                .andExpect(status().isOk());
+        verify(blogs).queryBlogOfUser(9L, 2);
+        for (String path : new String[]{"/blog/of/user", "/blog/of/user?id=bad", "/blog/of/user?id=9&current=bad"}) {
+            mvc.perform(get(path).header("authorization", "member")).andExpect(status().isBadRequest());
+        }
     }
 
     @Test
@@ -207,6 +230,14 @@ class AdminAccessTest {
     @EnableWebMvc
     @Import(MvcConfig.class)
     static class TestConfig {
+        @Bean IBlogCommentsService blogCommentsService() { return mock(IBlogCommentsService.class); }
+        @Bean BlogCommentsController blogCommentsController() { return new BlogCommentsController(); }
+        @Bean ShopGeoBuildService shopGeoBuildService() { return mock(ShopGeoBuildService.class); }
+        @Bean ShopGeoController shopGeoController() { return new ShopGeoController(); }
+        @Bean com.hmdp.mapper.ShopMapper shopMapper() { return mock(com.hmdp.mapper.ShopMapper.class); }
+        @Bean com.hmdp.mapper.ShopTypeMapper shopTypeMapper() { return mock(com.hmdp.mapper.ShopTypeMapper.class); }
+        @Bean com.hmdp.mapper.ShopGeoBuildMapper shopGeoBuildMapper() { return mock(com.hmdp.mapper.ShopGeoBuildMapper.class); }
+        @Bean com.hmdp.repository.ShopGeoRepository shopGeoRepository() { return mock(com.hmdp.repository.ShopGeoRepository.class); }
         @Bean
         @SuppressWarnings("unchecked")
         StringRedisTemplate stringRedisTemplate() {
@@ -245,6 +276,38 @@ class AdminAccessTest {
 
         @Bean
         UserController userController() { return new UserController(); }
+    }
+
+    @Test
+    void geoStatusAndRebuildAreAdminOnlyIncludingTheReadEndpoint() throws Exception {
+        ShopGeoBuildService builds=context.getBean(ShopGeoBuildService.class);
+        when(builds.status()).thenReturn(Result.ok(Map.of("index","UNINITIALIZED")));
+        when(builds.request()).thenReturn(Result.ok(Map.of("status","PENDING")));
+        mvc.perform(get("/shop/geo/status")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/shop/geo;scope=test/status")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/shop/geo/rebuild")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/shop/geo/status").header("authorization","member")).andExpect(status().isForbidden());
+        mvc.perform(get("/shop/geo;scope=test/status").header("authorization","member")).andExpect(status().isForbidden());
+        mvc.perform(post("/shop/geo/rebuild").header("authorization","member")).andExpect(status().isForbidden());
+        mvc.perform(get("/shop/geo/status").header("authorization","admin")).andExpect(status().isOk()).andExpect(jsonPath("$.data.index").value("UNINITIALIZED"));
+        mvc.perform(post("/shop/geo/rebuild").header("authorization","admin")).andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("PENDING"));
+        verify(builds,times(1)).request(); verify(builds,times(1)).status();
+    }
+
+    @Test
+    void commentQueriesAreAnonymousButPostAndDeleteStillRequireLogin() throws Exception {
+        IBlogCommentsService comments=context.getBean(IBlogCommentsService.class);
+        when(comments.queryRoots(1L,null,10)).thenReturn(Result.ok(new CommentPage(java.util.List.of(),null,false,0,"0",null)));
+        when(comments.queryReplies(100L,null,10)).thenReturn(Result.ok(new CommentPage(java.util.List.of(),null,false,0,"0",null)));
+        mvc.perform(get("/blog-comments/of/blog/1")).andExpect(status().isOk()).andExpect(jsonPath("$.data.list").isArray());
+        mvc.perform(get("/blog-comments/100/replies")).andExpect(status().isOk());
+        mvc.perform(head("/blog-comments/of/blog/1")).andExpect(status().isOk());
+        mvc.perform(post("/blog-comments").contentType("application/json").content("{}" )).andExpect(status().isUnauthorized());
+        mvc.perform(delete("/blog-comments/100")).andExpect(status().isUnauthorized());
+        verify(comments,never()).publish(any());verify(comments,never()).deleteComment(any());
+        when(comments.deleteComment(100L)).thenReturn(Result.ok());
+        mvc.perform(delete("/blog-comments/100").header("authorization","member")).andExpect(status().isOk());
+        verify(comments).deleteComment(100L);
     }
 
     @RestController

@@ -3,6 +3,8 @@ package com.hmdp.interceptor;
 import com.hmdp.config.AdminProperties;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.utils.UserHolder;
+import com.hmdp.controller.ShopGeoController;
+import org.springframework.web.method.HandlerMethod;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -23,7 +25,10 @@ public class AdminInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
-        if (isPublicRead(request)) return true;
+        // 按已匹配的控制器识别管理读取，避免 matrix 参数等 URL 变体绕过路径字符串判断。
+        boolean geoManagement=handler instanceof HandlerMethod method
+                && ShopGeoController.class.isAssignableFrom(method.getBeanType());
+        if (!geoManagement && isPublicRead(request)) return true;
         UserDTO user = UserHolder.getUser();
         if (user == null) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

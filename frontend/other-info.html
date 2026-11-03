@@ -27,6 +27,13 @@
       .follow-button { border: 0; font: inherit; text-align: center; }
       button:disabled { opacity: .6; cursor: wait; }
       .common-pages { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px; }
+      .blog-item { cursor: pointer; }
+      .blog-item a { color: inherit; text-decoration: none; }
+      .blog-item .blog-img, .blog-title { display: block; }
+      .blog-comments { display: inline-flex; align-items: center; gap: 2px; cursor: pointer; }
+      .blog-status { padding: 12px 0; text-align: center; }
+      .blog-status button { margin-left: 8px; }
+      .blog-item a:focus-visible { outline: 2px solid #ff6633; outline-offset: 2px; }
   </style>
 
 </head>
@@ -57,14 +64,23 @@
   <div class="content">
     <el-tabs v-model="activeName" @tab-click="handleClick">
       <el-tab-pane label="笔记" name="1">
-        <p v-if="blogsError">{{blogsError}}</p>
-        <div v-for="b in blogs" :key="b.id" class="blog-item">
-          <div class="blog-img"><img :src="b.images.split(',')[0]" alt=""></div>
+        <div v-for="b in blogs" :key="b.id" class="blog-item" @click="openBlog(b)">
+          <a class="blog-img" :href="blogUrl(b)" :aria-label="b.title || '查看笔记详情'" @click.stop><img :src="b.images.split(',')[0]" alt=""></a>
           <div class="blog-info">
-            <div class="blog-title" v-html="b.title"></div>
+            <a class="blog-title" :href="blogUrl(b)" @click.stop>{{b.title}}</a>
             <div class="blog-liked"><img src="/imgs/thumbup.png" alt=""> {{b.liked}}</div>
-            <div class="blog-comments"><i class="el-icon-chat-dot-round"></i> {{b.comments}}</div>
+            <a class="blog-comments" :href="commentUrl(b)" @click.stop :aria-label="'查看评论，共' + (b.comments == null ? 0 : b.comments) + '条'"><i class="el-icon-chat-dot-round"></i> {{b.comments == null ? 0 : b.comments}}</a>
           </div>
+        </div>
+        <div class="blog-status" aria-live="polite">
+          <span v-if="blogsPending">正在加载笔记…</span>
+          <template v-else-if="blogsError">
+            <span>{{blogsError}}</span>
+            <button type="button" @click="queryBlogs()">重试</button>
+          </template>
+          <span v-else-if="blogsLoaded && !blogs.length">暂无笔记</span>
+          <button v-else-if="blogsLoaded && !blogsEnded" type="button" :disabled="blogsPending" @click="queryBlogs()">加载更多</button>
+          <span v-else-if="blogsLoaded">笔记已加载完</span>
         </div>
       </el-tab-pane>
       <el-tab-pane label="共同关注" name="2">
@@ -97,7 +113,9 @@
 <script src="./js/axios.min.js"></script>
 <!-- 引入组件库 -->
 <script src="./js/element.js"></script>
-<script src="./js/common.js?v=20261031-1"></script>
+<script src="./js/common.js?v=20261103-3"></script>
+<script src="./js/blog-links.js?v=20261103-3"></script>
+<script src="./js/blog-of-user.js?v=20261103-3"></script>
 <script src="./js/follows.js?v=20261031-1"></script>
 <script src="./js/footer.js"></script>
 <script>
@@ -111,6 +129,10 @@
       info: {},
       blogs: [],
       blogsError: "",
+      blogsPending: false,
+      blogsLoaded: false,
+      blogsEnded: false,
+      blogsCurrent: 0,
       followed: false, // 是否关注了
       followPending: false,
       followReady: false,
@@ -125,13 +147,12 @@
     created() {
       this.queryLoginUser().then(loggedIn => { if (loggedIn) return this.queryUser(); });
     },
+    beforeDestroy() {
+      blogOfUser.destroy(this);
+    },
     methods: {
-      queryBlogs() {
-        return axios.get("/blog/of/user", {
-            params: {id: this.user.id, current: 1}
-          })
-          .then(({data}) => this.blogs = data)
-          .catch(() => { this.blogsError = "笔记暂时无法加载"; })
+      queryBlogs(reset) {
+        return blogOfUser.load(this, this.user && this.user.id, reset);
       },
       queryLoginUser() {
         // 查询用户信息
@@ -156,8 +177,8 @@
             }
             // 查询用户详情
             this.queryUserInfo();
-            // 查询用户笔记
-            this.queryBlogs();
+            // 查询用户笔记（按目标用户，不按当前登录用户）
+            this.queryBlogs(true);
             // 是否被关注
             this.isFollowed();
           })
@@ -219,6 +240,15 @@
       },
       toOtherInfo(id){
         location.href = "/other-info.html?id=" + id
+      },
+      blogUrl(blog) {
+        return blogLinks.detailUrl(blog && blog.id);
+      },
+      commentUrl(blog) {
+        return blogLinks.detailUrl(blog && blog.id, true);
+      },
+      openBlog(blog) {
+        return blogLinks.open(blog && blog.id);
       }
     },
 

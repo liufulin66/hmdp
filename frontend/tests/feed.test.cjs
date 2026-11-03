@@ -193,9 +193,10 @@ test('the profile keeps follow notes, scroll loading, detail navigation and shar
   const html = fs.readFileSync(path.join(__dirname, '../info.html'), 'utf8');
   const inline = [...html.matchAll(/<script>\s*([\s\S]*?)<\/script>/g)][0][1];
   let options;
-  const calls = [], location = {href: ''};
+  const calls = [], location = {href: ''}, linksWindow = {location};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/blog-links.js'), 'utf8'), {window: linksWindow});
   vm.runInNewContext(inline, {
-    Vue: function(value) {options = value;}, location,
+    Vue: function(value) {options = value;}, location, blogLinks: linksWindow.blogLinks,
     feed: {load: async (app, clear) => calls.push(['feed', clear]), destroy() {}},
     blogLikes: {toggle: async (app, blog) => calls.push(['like', blog.id])}
   });
@@ -207,7 +208,7 @@ test('the profile keeps follow notes, scroll loading, detail navigation and shar
   await app.addLike({id: 9});
   app.toBlogDetail({id: 9});
   assert.deepEqual(calls, [['feed', true], ['feed', undefined], ['like', 9]]);
-  assert.match(location.href, /blog-detail\.html\?id=9/);
+  assert.equal(location.href, '/blog-detail.html?v=20261103-3&id=9');
   assert.match(html, /暂无关注动态/);
   assert.match(html, /已经到底了/);
   assert.match(html, /正在加载动态/);

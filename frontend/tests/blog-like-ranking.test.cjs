@@ -10,7 +10,7 @@ function page(axios, successful = true) {
   let options;
   const errors = [];
   vm.runInNewContext(script, {Vue: function(value) {options = value;}, util: {}, axios,
-    blogLikes: {toggle: async () => successful}});
+    blogLikes: {toggle: async () => successful}, blogComments: {initial: () => ({})}});
   const app = {blog: {id: 4}, likes: [], $message: {error: value => errors.push(value)}};
   for (const [name, method] of Object.entries(options.methods)) app[name] = method.bind(app);
   return {app, errors};

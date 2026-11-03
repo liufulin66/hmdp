@@ -23,6 +23,8 @@ public class BlogPublicationService {
         long publishedAt = System.currentTimeMillis();
         blog.setId(null);
         blog.setUserId(authorId);
+        blog.setComments(0);
+        blog.setCommentVersion(0L);
         blog.setCreateTime(LocalDateTime.ofInstant(Instant.ofEpochMilli(publishedAt), ZoneId.systemDefault()));
         if (blogMapper.insert(blog) != 1) throw new IllegalStateException("发布笔记失败");
         taskMapper.createForFollowers(blog.getId(), authorId, publishedAt);

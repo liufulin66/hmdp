@@ -65,7 +65,15 @@ public class BlogComments implements Serializable {
     /**
      * 状态，0：正常，1：被举报，2：禁止查看
      */
-    private Boolean status;
+    private Integer status;
+
+    /** 独立逻辑删除标记；禁止加 @TableLogic，列表需要读取删除占位。 */
+    private Boolean deleted;
+
+    private String requestId;
+
+    /** 一级评论的正常、未删除回复数量。 */
+    private Long replyCount;
 
     /**
      * 创建时间
