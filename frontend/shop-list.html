@@ -81,6 +81,7 @@
 </div>
 <script src="./js/vue.js"></script><script src="./js/axios.min.js"></script><script src="./js/element.js"></script>
 <script src="./js/common.js?v=20261101-1"></script><script src="./js/shop-nearby.js?v=20261101-1"></script>
+<script src="./js/site-visits.js?v=20261103-uv-1"></script>
 <script>
   const app = new Vue({
     el: '#app',
@@ -93,7 +94,7 @@
     },
     beforeDestroy() { shopNearby.destroy(this); },
     methods: {
-      queryShops(reset) { return shopNearby.load(this, reset); },
+      async queryShops(reset) { const loaded = await shopNearby.load(this, reset); if (loaded) siteVisits.afterRender(this, 'SHOP_LIST'); return loaded; },
       changeType(type) { this.params.typeId = type.id; this.typeName = type.name; return this.queryShops(true); },
       ordinary() { return shopNearby.coordinates(this, 'classification'); },
       demo() { return shopNearby.coordinates(this, 'demo', 120.149993, 30.334229); },

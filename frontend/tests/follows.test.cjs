@@ -144,7 +144,7 @@ function page(name, axios, follows = {}) {
   let options;
   const location = {href: ''}, errors = [];
   vm.runInNewContext(inline, {Vue: function(value) {options = value;}, util: {getUrlParam: () => '2'}, axios, follows, location,
-    blogComments: {initial: () => ({})}});
+    blogComments: {initial: () => ({})}, siteVisits: {afterRender() {}}});
   const app = {...options.data, $message: {error: error => errors.push(error)}};
   for (const [name, method] of Object.entries(options.methods)) app[name] = method.bind(app);
   return {app, html, errors, options, location};

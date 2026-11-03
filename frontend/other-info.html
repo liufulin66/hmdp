@@ -118,6 +118,7 @@
 <script src="./js/blog-of-user.js?v=20261103-3"></script>
 <script src="./js/follows.js?v=20261031-1"></script>
 <script src="./js/footer.js"></script>
+<script src="./js/site-visits.js?v=20261103-uv-1"></script>
 <script>
   const app = new Vue({
     el: "#app",
@@ -176,6 +177,7 @@
               return;
             }
             // 查询用户详情
+            siteVisits.afterRender(this, 'USER_PROFILE');
             this.queryUserInfo();
             // 查询用户笔记（按目标用户，不按当前登录用户）
             this.queryBlogs(true);

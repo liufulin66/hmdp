@@ -71,6 +71,7 @@
 <script src="./js/blog-links.js?v=20261103-3"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/footer.js"></script>
+<script src="./js/site-visits.js?v=20261103-uv-1"></script>
 <script>
 
   const app = new Vue({
@@ -83,8 +84,9 @@
     },
     created() {
       // 查询类型
-      this.queryTypes();
-      this.queryHotBlogsScroll();
+      Promise.all([this.queryTypes(), this.queryHotBlogsScroll()]).then(results => {
+        if (results.every(Boolean)) siteVisits.afterRender(this, 'HOME');
+      });
     },
     mounted() {
       this.stopLikeSync = blogLikes.watch(this, () => this.blogs);
@@ -94,22 +96,26 @@
     },
     methods: {
       queryTypes() {
-        axios.get("/shop-type/list")
+        return axios.get("/shop-type/list")
           .then(({data}) => {
             this.types = data;
+            return true;
           })
           .catch(err => {
             this.$message.error(err)
+            return false;
           })
       },
       queryHotBlogsScroll() {
-        axios.get("/blog/hot?current=" + this.current)
+        return axios.get("/blog/hot?current=" + this.current)
           .then(({data}) => {
             data.forEach(b => b.img = b.images.split(",")[0]);
             this.blogs = this.blogs.concat(data);
+            return true;
           })
           .catch(err => {
             this.$message.error(err)
+            return false;
           })
       },
       addLike(b) {

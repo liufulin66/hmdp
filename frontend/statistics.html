@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>站点UV统计 · 黑马点评</title>
+  <link rel="stylesheet" href="./css/statistics.css?v=20261103-uv-1">
+</head>
+<body>
+<main id="app">
+  <header><a href="/info.html">返回个人主页</a><h1>站点UV访问统计</h1><span class="badge">近似统计</span></header>
+  <p>按上海自然日统计独立浏览器；清除 Cookie 或更换浏览器可能形成新访客，UV 不等于精确自然人数。</p>
+  <section>
+    <h2>指定日期UV</h2>
+    <form @submit.prevent="queryDaily">
+      <label>日期 <input type="date" v-model="statisticsState.selectedDate" :max="statisticsState.serverToday" min="0001-01-01" @change="queryDaily"></label>
+      <button type="submit" :disabled="statisticsState.dailyPending">查询</button>
+    </form>
+    <p v-if="statisticsState.dailyPending" aria-live="polite">正在加载每日UV…</p>
+    <p v-else-if="statisticsState.dailyError" class="error" role="alert">{{statisticsState.dailyError}} <button @click="queryDaily">重试</button> <a href="/login.html">登录</a></p>
+    <div v-else-if="statisticsState.daily" class="daily-result">
+      {{statisticsState.daily.date}} · {{statusLabel(statisticsState.daily.status)}} ·
+      <strong>{{statisticsState.daily.status === 'AVAILABLE' ? '约 ' + statisticsState.daily.uv + ' UV' : '暂无可用统计值'}}</strong>
+      <p v-if="statisticsState.daily.status === 'AVAILABLE' && statisticsState.daily.uv === 0">当日无已采集的浏览记录。</p>
+    </div>
+  </section>
+  <section>
+    <h2>最近7个自然日 <button :disabled="statisticsState.recentPending" @click="queryRecent">刷新</button></h2>
+    <p v-if="statisticsState.recentPending" aria-live="polite">正在加载趋势…</p>
+    <p v-else-if="statisticsState.recentError" class="error" role="alert">{{statisticsState.recentError}} <button @click="queryRecent">重试</button></p>
+    <template v-else-if="statisticsState.recent">
+      <p>请求范围：{{statisticsState.recent.requestedFrom}} ～ {{statisticsState.recent.requestedTo}}</p>
+      <p v-if="statisticsState.recent.coverageFrom">实际覆盖：{{statisticsState.recent.coverageFrom}} ～ {{statisticsState.recent.coverageTo}}</p>
+      <p v-else>尚无已采集日期</p>
+      <p>{{statisticsState.recent.complete ? '已覆盖完整7天' : '覆盖不足7天；未采集日期不补为0'}}。</p>
+      <p class="range-uv">实际覆盖区间去重UV：<strong>{{statisticsState.recent.rangeUv === null ? '不可计算' : '约 ' + statisticsState.recent.rangeUv}}</strong></p>
+      <p>区间值合并去重，不是每日UV之和。</p>
+      <table><thead><tr><th>上海日期</th><th>近似UV</th><th>数据状态</th></tr></thead>
+        <tbody><tr v-for="day in statisticsState.recent.list" :key="day.date"><td>{{day.date}}</td><td>{{day.status === 'AVAILABLE' ? '约 ' + day.uv : '—'}}</td><td>{{statusLabel(day.status)}}</td></tr></tbody>
+      </table>
+    </template>
+  </section>
+  <p>本页查询由服务端校验管理员权限。HyperLogLog 为近似摘要，标准误差约0.81%；Redis 数据丢失后无法从摘要重建原始访问。</p>
+</main>
+<script src="./js/vue.js"></script><script src="./js/axios.min.js"></script>
+<script src="./js/site-statistics.js?v=20261103-uv-1"></script>
+<script>
+  const app = new Vue({el: '#app', data: {statisticsState: siteStatistics.initial()},
+    created() { siteStatistics.attach(this); }, beforeDestroy() { siteStatistics.destroy(this); },
+    methods: {queryDaily() { return siteStatistics.daily(this, this.statisticsState.selectedDate, true); },
+      queryRecent() { return siteStatistics.recent(this, true); }, statusLabel: siteStatistics.label}
+  });
+</script>
+</body></html>

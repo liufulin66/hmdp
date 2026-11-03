@@ -190,6 +190,7 @@
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/follows.js?v=20261031-1"></script>
 <script src="./js/blog-comments.js?v=20261103-2"></script>
+<script src="./js/site-visits.js?v=20261103-uv-1"></script>
 <script>
   let each = function (ary, callback) {
     for (let i = 0, l = ary.length; i < l; i++) {
@@ -293,6 +294,7 @@
             if (this.commentState.loaded || this.commentState.countVersion !== '0') this.blog.comments = this.commentState.commentCount;
             this.$nextTick(() => {
               this.init();
+              siteVisits.afterRender(this, 'BLOG_DETAIL', () => this.blogRequestId === requestId && !this.blogError);
               // 只滚动到评论区，不聚焦输入框，避免手机上自动弹出键盘。
               if (this.focusCommentsOnLoad) this.commentFocus = blogDetail.focusComments(this);
             });

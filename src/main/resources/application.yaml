@@ -37,6 +37,11 @@ logging:
     com.hmdp.mapper.ShopGeoTaskMapper: info
     com.hmdp.mapper.ShopGeoBuildMapper: info
 hmdp:
+  statistics:
+    # 首次上线日期固定保存；跨日重启不要改成“启动当天”。
+    start-date: ${HMDP_STATISTICS_START_DATE:2026-11-03}
+    # 本机 HTTP 保持 false；HTTPS 部署按环境配置为 true。
+    cookie-secure: ${HMDP_STATISTICS_COOKIE_SECURE:false}
   admin:
     # 配置已存在用户的 ID，例如环境变量 HMDP_ADMIN_USER_IDS=1,2；默认禁止管理写入。
     user-ids: ${HMDP_ADMIN_USER_IDS:}

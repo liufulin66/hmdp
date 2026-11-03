@@ -130,6 +130,7 @@ function detailPage(params, makeAxios) {
     return {data: []};
   }};
   vm.runInNewContext(inline, {
+    siteVisits: {afterRender() {}},
     Vue: function (value) { options = value; }, location,
     util: {getUrlParam: name => params[name] || ''},
     axios, token: '',

@@ -27,6 +27,7 @@ function page(name) {
     follows: {toggle: async () => {}, refresh: async () => {}, label: () => ''},
     blogOfUser: {load: async (app, id, reset) => { calls.push(['blogs', String(id), reset]); }},
     blogComments: {initial: () => ({})},
+    siteVisits: {afterRender() {}},
     userSign: {initial: () => ({}), attach: async () => {}, destroy() {}},
     token: ''
   };

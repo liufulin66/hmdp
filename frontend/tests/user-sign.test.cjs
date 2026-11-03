@@ -151,6 +151,7 @@ test('profile initializes sign only after login and keeps existing lifecycle and
   const inline = [...html.matchAll(/<script>\s*([\s\S]*?)<\/script>/g)][0][1];
   let options; const calls = [], location = {href: ''};
   vm.runInNewContext(inline, {
+    siteVisits: {afterRender() {}},
     Vue: function (value) {options = value;}, userSign: {initial: () => ({}), attach: () => calls.push('sign'), destroy: () => calls.push('sign-destroy')},
     feed: {destroy: () => calls.push('feed-destroy')}, axios: {get: async () => ({data: {id: '1001'}})}, location
   });

@@ -197,6 +197,7 @@ test('the profile keeps follow notes, scroll loading, detail navigation and shar
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../js/blog-links.js'), 'utf8'), {window: linksWindow});
   vm.runInNewContext(inline, {
     userSign: {initial: () => ({}), attach: async () => {}, destroy() {}},
+    siteVisits: {afterRender() {}},
     Vue: function(value) {options = value;}, location, blogLinks: linksWindow.blogLinks,
     feed: {load: async (app, clear) => calls.push(['feed', clear]), destroy() {}},
     blogLikes: {toggle: async (app, blog) => calls.push(['like', blog.id])}

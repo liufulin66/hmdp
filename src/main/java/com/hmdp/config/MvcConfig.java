@@ -11,7 +11,7 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
-@EnableConfigurationProperties(AdminProperties.class)
+@EnableConfigurationProperties({AdminProperties.class, StatisticsProperties.class})
 public class MvcConfig implements WebMvcConfigurer {
 
     @Resource
@@ -45,7 +45,7 @@ public class MvcConfig implements WebMvcConfigurer {
 
         // /shop/** 和 /voucher/** 的公开查询与管理写入按 HTTP 方法区分。
         registry.addInterceptor(new AdminInterceptor(adminProperties))
-                .addPathPatterns("/shop", "/shop/**", "/voucher", "/voucher/**")
+                .addPathPatterns("/shop", "/shop/**", "/voucher", "/voucher/**", "/statistics", "/statistics/**")
                 .order(2);
     }
 }

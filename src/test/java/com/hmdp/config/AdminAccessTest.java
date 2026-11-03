@@ -258,6 +258,9 @@ class AdminAccessTest {
     @EnableWebMvc
     @Import(MvcConfig.class)
     static class TestConfig {
+        @Bean com.hmdp.service.impl.StatisticsService statisticsService() { return mock(com.hmdp.service.impl.StatisticsService.class); }
+        @Bean com.hmdp.utils.VisitorCookie visitorCookie(StatisticsProperties properties) { return new com.hmdp.utils.VisitorCookie(properties); }
+        @Bean com.hmdp.controller.StatisticsController statisticsController(com.hmdp.service.impl.StatisticsService statistics, com.hmdp.utils.VisitorCookie visitors) { return new com.hmdp.controller.StatisticsController(statistics, visitors); }
         @Bean IBlogCommentsService blogCommentsService() { return mock(IBlogCommentsService.class); }
         @Bean BlogCommentsController blogCommentsController() { return new BlogCommentsController(); }
         @Bean ShopGeoBuildService shopGeoBuildService() { return mock(ShopGeoBuildService.class); }
@@ -336,6 +339,49 @@ class AdminAccessTest {
         when(comments.deleteComment(100L)).thenReturn(Result.ok());
         mvc.perform(delete("/blog-comments/100").header("authorization","member")).andExpect(status().isOk());
         verify(comments).deleteComment(100L);
+    }
+
+    @Test
+    void anonymousVisitIsAllowedButAllUvReadsIncludingMatrixAndHeadRequireAdmin() throws Exception {
+        var statistics = context.getBean(com.hmdp.service.impl.StatisticsService.class);
+        when(statistics.record(anyString())).thenReturn(Result.ok(Map.of("collected", true)));
+        mvc.perform(post("/statistics/visits").contentType("application/json").content("{\"pageType\":\"HOME\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.collected").value(true));
+        for (String path : new String[]{"/statistics/uv/daily", "/statistics/uv/recent", "/statistics;scope=public/uv/daily"}) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("authorization", "expired")).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("authorization", "member")).andExpect(status().isForbidden());
+        }
+        mvc.perform(head("/statistics/uv/daily")).andExpect(status().isUnauthorized());
+        mvc.perform(head("/statistics/uv/daily").header("authorization", "member")).andExpect(status().isForbidden());
+        when(statistics.daily(null)).thenReturn(Result.ok(new com.hmdp.dto.UvDaily("2026-11-03", 1L, true, com.hmdp.dto.UvDaily.Availability.AVAILABLE)));
+        mvc.perform(get("/statistics/uv/daily").header("authorization", "admin"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.uv").value(1))
+                .andExpect(jsonPath("$.data.approximate").value(true));
+        verify(statistics, times(1)).daily(null);
+        verify(statistics, never()).recent();
+    }
+
+    @Test
+    void eventsRejectUnknownIdentityFieldsAndReuseVisitorAcrossAuthStates() throws Exception {
+        var statistics = context.getBean(com.hmdp.service.impl.StatisticsService.class);
+        when(statistics.record(anyString())).thenReturn(Result.ok(Map.of("collected", true)));
+        for (String body : new String[]{"{\"pageType\":\"HOME\",\"visitorId\":\"x\"}",
+                "{\"pageType\":\"HOME\",\"date\":\"1999-01-01\"}", "{\"pageType\":\"HOME\",\"key\":\"other\"}",
+                "{\"pageType\":\"WRONG\"}", "{\"pageType\":\"" + "x".repeat(1000) + "\"}"}) {
+            mvc.perform(post("/statistics/visits").contentType("application/json").content(body)).andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(statistics);
+        String visitor = java.util.UUID.randomUUID().toString();
+        var cookie = new jakarta.servlet.http.Cookie(com.hmdp.utils.VisitorCookie.NAME, visitor);
+        mvc.perform(post("/statistics/visits").cookie(cookie).contentType("application/json").content("{\"pageType\":\"HOME\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/statistics/visits").header("authorization", "member").cookie(cookie)
+                        .contentType("application/json").content("{\"pageType\":\"MY_PROFILE\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/statistics/visits").cookie(cookie).contentType("application/json").content("{\"pageType\":\"HOME\"}"))
+                .andExpect(status().isOk());
+        verify(statistics, times(3)).record(visitor);
     }
 
     @RestController

@@ -111,6 +111,7 @@
       </template>
     </div>
   </section>
+  <p style="margin: 12px"><a href="/statistics.html">站点UV统计（管理员）</a></p>
   <div class="content">
     <el-tabs v-model="activeName" @tab-click="handleClick">
       <el-tab-pane label="笔记" name="1">
@@ -177,6 +178,7 @@
 <script src="./js/feed.js?v=20261031-1"></script>
 <script src="./js/user-sign.js?v=20261103-sign-3"></script>
 <script src="./js/footer.js"></script>
+<script src="./js/site-visits.js?v=20261103-uv-1"></script>
 <script>
   const app = new Vue({
     el: "#app",
@@ -240,6 +242,7 @@
           .then(({data}) => {
             // 保存用户
             this.user = data;
+            siteVisits.afterRender(this, 'MY_PROFILE');
             userSign.attach(this);
             // 查询用户详情
             this.queryUserInfo();

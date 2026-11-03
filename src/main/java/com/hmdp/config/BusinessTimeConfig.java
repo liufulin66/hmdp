@@ -10,7 +10,7 @@ import java.time.ZoneId;
 public class BusinessTimeConfig {
     public static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
-    @Bean("signClock")
+    @Bean({"businessClock", "signClock"})
     public Clock signClock() {
         return Clock.system(BUSINESS_ZONE);
     }

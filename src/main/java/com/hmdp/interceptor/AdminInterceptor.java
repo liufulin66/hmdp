@@ -4,6 +4,8 @@ import com.hmdp.config.AdminProperties;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.utils.UserHolder;
 import com.hmdp.controller.ShopGeoController;
+import com.hmdp.annotation.AdminOnly;
+import com.hmdp.annotation.AnonymousPost;
 import org.springframework.web.method.HandlerMethod;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -28,7 +30,10 @@ public class AdminInterceptor implements HandlerInterceptor {
         // 按已匹配的控制器识别管理读取，避免 matrix 参数等 URL 变体绕过路径字符串判断。
         boolean geoManagement=handler instanceof HandlerMethod method
                 && ShopGeoController.class.isAssignableFrom(method.getBeanType());
-        if (!geoManagement && isPublicRead(request)) return true;
+        boolean adminMethod = handler instanceof HandlerMethod method && method.hasMethodAnnotation(AdminOnly.class);
+        if (!adminMethod && "POST".equals(request.getMethod()) && handler instanceof HandlerMethod method
+                && method.hasMethodAnnotation(AnonymousPost.class)) return true;
+        if (!geoManagement && !adminMethod && isPublicRead(request)) return true;
         UserDTO user = UserHolder.getUser();
         if (user == null) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

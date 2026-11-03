@@ -160,6 +160,7 @@ function page() {
   let options;
   const calls = [], location = {href: ''};
   vm.runInNewContext(inline, {
+    siteVisits: {afterRender() {}},
     Vue: function (value) { options = value; }, location,
     util: {getUrlParam: () => '2'},
     axios: {get: async () => ({data: []})},
