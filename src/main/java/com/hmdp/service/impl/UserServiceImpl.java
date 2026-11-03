@@ -47,6 +47,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource 
     private StringRedisTemplate stringRedisTemplate;
 
+    @Resource
+    private UserSignService userSignService;
+
+    @Override
+    public Result sign() { return userSignService.sign(); }
+
+    @Override
+    public Result signStatus() { return userSignService.status(); }
+
+    @Override
+    public Result signCalendar(String month) { return userSignService.calendar(month); }
+
     @Override
     public Result queryUserById(Long id) {
         if (id == null || id <= 0) return Result.fail("用户ID必须为正数");

@@ -71,6 +71,21 @@ public class UserController {
         return Result.ok(user);
     }
 
+    @PostMapping("/sign")
+    public Result sign() {
+        return userService.sign();
+    }
+
+    @GetMapping("/sign/status")
+    public Result signStatus() {
+        return userService.signStatus();
+    }
+
+    @GetMapping("/sign/calendar")
+    public Result signCalendar(@RequestParam(value = "month", required = false) String month) {
+        return userService.signCalendar(month);
+    }
+
     @GetMapping("/info/{id}")
     public Result info(@PathVariable("id") Long userId){
         // 查询详情

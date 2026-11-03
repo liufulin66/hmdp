@@ -1,0 +1,22 @@
+.sign-panel { margin: 12px; padding: 14px; border: 1px solid #eee; border-radius: 8px; background: #fff; color: #333; }
+.sign-heading, .sign-month-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sign-heading h2 { margin: 0; font-size: 16px; }
+.sign-panel button { padding: 6px 10px; border: 1px solid #ddd; border-radius: 5px; background: white; color: #555; cursor: pointer; }
+.sign-panel .sign-action { background: #ff6633; border-color: #ff6633; color: white; }
+.sign-panel button:disabled { opacity: .6; cursor: default; }
+.sign-month-controls { margin-top: 12px; flex-wrap: wrap; }
+.sign-month-controls input { width: 125px; padding: 5px; border: 1px solid #ddd; border-radius: 4px; font: inherit; }
+.sign-summary, .sign-help { margin: 10px 0; font-size: 13px; color: #666; }
+.sign-help { font-size: 12px; }
+.sign-error { font-size: 13px; color: #b4451d; margin: 8px 0; }
+.sign-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; }
+.sign-weekday, .sign-day { min-height: 29px; line-height: 29px; font-size: 13px; }
+.sign-weekday { color: #888; }
+.sign-day { border-radius: 5px; }
+.sign-day.signed { background: #fff0e8; color: #d64c1f; font-weight: bold; }
+.sign-day.today { outline: 1px solid #ff6633; outline-offset: -1px; }
+.own-profile #app { min-height: 100vh; height: auto; padding-bottom: 70px; box-sizing: border-box; }
+.own-profile .header { height: 44px; }
+.own-profile .basic { height: auto; min-height: 95px; }
+.own-profile .content { height: 60vh; min-height: 320px; }
+.own-profile .foot { position: fixed; height: 60px; background: #fff; z-index: 10; }

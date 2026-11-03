@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./css/element.css">
   <link href="./css/main.css" rel="stylesheet">
   <link href="./css/info.css" rel="stylesheet">
+  <link href="./css/user-sign.css?v=20261103-sign-2" rel="stylesheet">
 
   <style type="text/css">
       .el-tabs--bottom .el-tabs__item.is-bottom:nth-child(2), .el-tabs--bottom .el-tabs__item.is-top:nth-child(2), .el-tabs--top .el-tabs__item.is-bottom:nth-child(2), .el-tabs--top .el-tabs__item.is-top:nth-child(2) {
@@ -43,7 +44,7 @@
 
 </head>
 
-<body>
+<body class="own-profile">
 <div id="app">
   <div class="header">
     <div class="header-back-btn" @click="goBack"><i class="el-icon-arrow-left"></i></div>
@@ -68,6 +69,40 @@
     <span v-if="info.introduce"></span>
     <span v-else>添加个人简介，让大家更好的认识你 <i class="el-icon-edit"></i></span>
   </div>
+  <section class="sign-panel" aria-label="我的签到" v-if="user">
+    <div class="sign-heading">
+      <h2>每日签到</h2>
+      <button type="button" :disabled="signState.statusPending || signState.signPending" @click="refreshSignStatus">刷新状态</button>
+      <button type="button" class="sign-action" :disabled="signState.signPending || signState.statusPending || signState.signed === true || !signState.today" @click="signToday">
+        {{signState.signPending ? '签到中…' : signState.signed === true ? '今日已签到' : signState.signed === null ? '签到状态待确认' : '今日签到'}}
+      </button>
+    </div>
+    <p class="sign-help">{{signState.today ? '上海日期：' + signState.today : '正在确认服务端日期…'}} · 月历仅供查看，不支持补签</p>
+    <div class="sign-error" v-if="signState.statusError || signState.signError" role="alert">
+      {{signState.signError || signState.statusError}}
+      <button type="button" :disabled="signState.statusPending || signState.signPending" @click="refreshSignStatus">查询状态</button>
+      <button type="button" v-if="signState.signError && signState.signed !== true" :disabled="signState.signPending || signState.statusPending || !signState.today" @click="signToday">重试签到</button>
+    </div>
+    <div class="sign-month-controls">
+      <button type="button" :disabled="!signState.month || signState.month === '0001-01'" @click="shiftSignMonth(-1)" aria-label="上个月">‹</button>
+      <input type="month" aria-label="查询签到月份" :value="signState.month" :max="signState.today.slice(0, 7)" min="0001-01" @change="loadSignCalendar($event.target.value)">
+      <button type="button" :disabled="!signState.today || !signState.month || signState.month >= signState.today.slice(0, 7)" @click="shiftSignMonth(1)" aria-label="下个月">›</button>
+      <button type="button" :disabled="!signState.today" @click="loadSignCalendar(signState.today.slice(0, 7))">返回本月</button>
+    </div>
+    <div aria-live="polite">
+      <p v-if="signState.calendarPending" class="sign-help">正在加载月历…</p>
+      <p v-if="signState.calendarError" class="sign-error" role="alert">{{signState.calendarError}} <button type="button" :disabled="signState.calendarPending" @click="loadSignCalendar(signState.month, true)">重试月历</button></p>
+      <template v-if="signState.calendar">
+        <p class="sign-summary">{{signState.calendar.month === signState.today.slice(0, 7) ? '本月' : signState.calendar.month}}已签到{{signState.calendar.signCount}}天</p>
+        <div class="sign-calendar" role="list" :aria-label="signState.calendar.month + '签到日历'">
+          <span v-for="weekday in ['一','二','三','四','五','六','日']" :key="'w' + weekday" class="sign-weekday">{{weekday}}</span>
+          <span v-for="(day, index) in signCalendarCells()" :key="'d' + index" class="sign-day" role="listitem"
+                :class="{signed: day && signState.calendar.signedDays.includes(day), today: day && signState.today === signState.calendar.month + '-' + String(day).padStart(2, '0')}"
+                :aria-label="day ? day + '日' + (signState.calendar.signedDays.includes(day) ? '已签到' : '未签到') : ''">{{day || ''}}</span>
+        </div>
+      </template>
+    </div>
+  </section>
   <div class="content">
     <el-tabs v-model="activeName" @tab-click="handleClick">
       <el-tab-pane label="笔记" name="1">
@@ -132,12 +167,14 @@
 <script src="./js/blog-links.js?v=20261103-3"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/feed.js?v=20261031-1"></script>
+<script src="./js/user-sign.js?v=20261103-sign-2"></script>
 <script src="./js/footer.js"></script>
 <script>
   const app = new Vue({
     el: "#app",
     data: {
       user: "",
+      signState: userSign.initial(),
       activeName: "1",
       info: {},
       blogs: [],
@@ -161,8 +198,14 @@
     beforeDestroy() {
       if (this.stopLikeSync) this.stopLikeSync();
       feed.destroy(this);
+      userSign.destroy(this);
     },
     methods: {
+      signToday() { return userSign.sign(this); },
+      refreshSignStatus() { return userSign.refreshStatus(this); },
+      loadSignCalendar(month, force) { return userSign.calendar(this, month, force); },
+      shiftSignMonth(delta) { return userSign.shift(this, delta); },
+      signCalendarCells() { return userSign.cells(this.signState); },
       queryBlogs() {
         axios.get("/blog/of/me")
           .then(({data}) => this.blogs = data)
@@ -189,6 +232,7 @@
           .then(({data}) => {
             // 保存用户
             this.user = data;
+            userSign.attach(this);
             // 查询用户详情
             this.queryUserInfo();
             // 查询用户笔记

@@ -25,4 +25,10 @@ public interface IUserService extends IService<User> {
 
     Result logout(String token);
 
+    Result sign();
+
+    Result signStatus();
+
+    Result signCalendar(String month);
+
 }

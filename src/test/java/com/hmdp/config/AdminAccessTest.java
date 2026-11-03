@@ -170,6 +170,33 @@ class AdminAccessTest {
     }
 
     @Test
+    void signRoutesArePrivateAndHaveNoClientSuppliedUserOrDate() throws Exception {
+        IUserService users = context.getBean(IUserService.class);
+        for (String path : new String[]{"/user/sign/status", "/user/sign/calendar"}) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("authorization", "expired")).andExpect(status().isUnauthorized());
+        }
+        mvc.perform(post("/user/sign")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(users);
+        when(users.sign()).thenReturn(Result.ok(new com.hmdp.dto.SignResult("2026-11-03", true, true)));
+        when(users.signStatus()).thenReturn(Result.ok(new com.hmdp.dto.SignStatus("2026-11-03", true)));
+        when(users.signCalendar(null)).thenReturn(Result.ok(new com.hmdp.dto.SignCalendar("2026-11", 30, java.util.List.of(3), 1)));
+        mvc.perform(post("/user/sign?userId=999&date=1999-01-01").header("authorization", "member")
+                        .contentType("application/json").content("{\"userId\":999,\"date\":\"1999-01-01\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.date").value("2026-11-03"));
+        mvc.perform(get("/user/sign/status?userId=999").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.signed").value(true));
+        mvc.perform(get("/user/sign/calendar?userId=999").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.signedDays[0]").value(3));
+        when(users.signCalendar("")).thenReturn(Result.fail("月份格式错误"));
+        mvc.perform(get("/user/sign/calendar?month=").header("authorization", "member"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(false));
+        when(users.queryUserById(3L)).thenReturn(Result.ok(new UserDTO()));
+        mvc.perform(get("/user/3").header("authorization", "member")).andExpect(status().isOk());
+        verify(users).sign(); verify(users).signStatus(); verify(users).signCalendar(null); verify(users).signCalendar("");
+    }
+
+    @Test
     void followRoutesKeepBooleanResultsAndDefaultPagination() throws Exception {
         IFollowService follows = context.getBean(IFollowService.class);
         when(follows.follow(3L, true)).thenReturn(Result.ok(true));
