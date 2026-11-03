@@ -179,13 +179,14 @@ class AdminAccessTest {
         mvc.perform(post("/user/sign")).andExpect(status().isUnauthorized());
         verifyNoInteractions(users);
         when(users.sign()).thenReturn(Result.ok(new com.hmdp.dto.SignResult("2026-11-03", true, true)));
-        when(users.signStatus()).thenReturn(Result.ok(new com.hmdp.dto.SignStatus("2026-11-03", true)));
+        when(users.signStatus()).thenReturn(Result.ok(new com.hmdp.dto.SignStatus("2026-11-03", true, 6)));
         when(users.signCalendar(null)).thenReturn(Result.ok(new com.hmdp.dto.SignCalendar("2026-11", 30, java.util.List.of(3), 1)));
         mvc.perform(post("/user/sign?userId=999&date=1999-01-01").header("authorization", "member")
                         .contentType("application/json").content("{\"userId\":999,\"date\":\"1999-01-01\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.date").value("2026-11-03"));
         mvc.perform(get("/user/sign/status?userId=999").header("authorization", "member"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.data.signed").value(true));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.signed").value(true))
+                .andExpect(jsonPath("$.data.continuousDays").value(6));
         mvc.perform(get("/user/sign/calendar?userId=999").header("authorization", "member"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.signedDays[0]").value(3));
         when(users.signCalendar("")).thenReturn(Result.fail("月份格式错误"));

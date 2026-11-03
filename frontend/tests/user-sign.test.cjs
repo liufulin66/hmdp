@@ -14,7 +14,7 @@ function fixture() {
   };
   vm.runInNewContext(source, {window, axios});
   const app = {signState: window.userSign.initial()};
-  const status = (index, signed = false, date = '2026-11-03') => reads[index].resolve({data: {date, signed}});
+  const status = (index, signed = false, date = '2026-11-03', continuousDays = signed ? 1 : 0) => reads[index].resolve({data: {date, signed, continuousDays}});
   const calendar = (index, month = '2026-11', signedDays = [], daysInMonth = 30) => reads[index].resolve({data: {
     month, daysInMonth, signedDays, signCount: signedDays.length
   }});
@@ -40,8 +40,9 @@ test('duplicate clicks send one bodyless POST and success reloads calendar', asy
   assert.equal(f.posts.length, 1); assert.equal(f.posts[0].url, '/user/sign'); assert.equal(f.posts[0].body, undefined);
   assert.equal(f.app.signState.signPending, true);
   f.signed(0); await tick(); assert.equal(f.app.signState.signed, true);
-  f.calendar(2, '2026-11', [3]); await posted;
+  f.status(2, true, '2026-11-03', 6); f.calendar(3, '2026-11', [3]); await posted;
   assert.equal(f.app.signState.signPending, false); assert.equal(f.app.signState.calendar.signCount, 1);
+  assert.equal(f.app.signState.continuousDays, 6);
   await f.api.sign(f.app); assert.equal(f.posts.length, 1);
 });
 
@@ -51,7 +52,9 @@ test('pre-sign status and calendar cannot revert success or clear fresh pending'
   const posted = f.api.sign(f.app); f.signed(0); await tick();
   f.status(2, false); f.calendar(3); await Promise.all([oldStatus, oldCalendar]);
   assert.equal(f.app.signState.signed, true); assert.equal(f.app.signState.calendarPending, true);
-  f.calendar(4, '2026-11', [3]); await posted; assert.equal(f.app.signState.calendar.signCount, 1);
+  assert.equal(f.app.signState.statusPending, true); assert.equal(f.app.signState.continuousDays, null);
+  f.status(4, true, '2026-11-03', 6); f.calendar(5, '2026-11', [3]); await posted;
+  assert.equal(f.app.signState.calendar.signCount, 1); assert.equal(f.app.signState.continuousDays, 6);
 });
 
 test('timeout is unknown, status reconciliation and identical-intent POST retry work', async () => {
@@ -64,7 +67,7 @@ test('timeout is unknown, status reconciliation and identical-intent POST retry 
   const second = fixture(); await ready(second);
   const timedOut = second.api.sign(second.app); second.posts[0].reject(new Error('timeout')); await timedOut;
   const retry = second.api.sign(second.app); second.signed(1, '2026-11-03', false); await tick();
-  second.calendar(2, '2026-11', [3]); await retry;
+  second.status(2, true); second.calendar(3, '2026-11', [3]); await retry;
   assert.equal(second.posts.length, 2); assert.equal(second.app.signState.calendar.signCount, 1);
 });
 
@@ -101,12 +104,14 @@ test('cross-month success follows server date while preserving explicit history 
   const f = fixture(); const attached = f.api.attach(f.app);
   f.status(0, false, '2026-10-31'); f.calendar(1, '2026-10', [], 31); await attached;
   const post = f.api.sign(f.app); f.signed(0, '2026-11-01'); await tick();
-  assert.equal(f.reads[2].config.params.month, '2026-11'); f.calendar(2, '2026-11', [1]); await post;
+  assert.equal(f.reads[3].config.params.month, '2026-11');
+  f.status(2, true, '2026-11-01', 1); f.calendar(3, '2026-11', [1]); await post;
   assert.equal(f.app.signState.today, '2026-11-01'); assert.equal(f.app.signState.month, '2026-11');
   const g = fixture(); await ready(g); const pending = g.api.sign(g.app);
   const history = g.api.calendar(g.app, '2026-10'); g.calendar(2, '2026-10', [1], 31); await history;
-  g.signed(0); await tick(); assert.equal(g.reads[3].config.params.month, '2026-10');
-  g.calendar(3, '2026-10', [1], 31); await pending; assert.equal(g.app.signState.month, '2026-10');
+  g.signed(0); await tick(); assert.equal(g.reads[4].config.params.month, '2026-10');
+  g.status(3, true, '2026-11-03', 6); g.calendar(4, '2026-10', [1], 31); await pending;
+  assert.equal(g.app.signState.month, '2026-10'); assert.equal(g.app.signState.continuousDays, 6);
 });
 
 test('failed initial queries remain unknown and explicit retry recovers', async () => {
@@ -138,6 +143,7 @@ test('known signed date stays signed, but a later server day can be unsigned', a
   const old = f.api.status(f.app); f.status(3, false); await old; assert.equal(f.app.signState.signed, true);
   const next = f.api.status(f.app); f.status(4, false, '2026-11-04'); await next;
   assert.equal(f.app.signState.today, '2026-11-04'); assert.equal(f.app.signState.signed, false);
+  assert.equal(f.app.signState.continuousDays, 0);
 });
 
 test('profile initializes sign only after login and keeps existing lifecycle and versioned resources', async () => {
@@ -152,7 +158,7 @@ test('profile initializes sign only after login and keeps existing lifecycle and
   options.methods.queryUser.call(app); assert.deepEqual(calls, []); await tick();
   assert.deepEqual(calls, ['sign', 'profile', 'blogs']);
   options.beforeDestroy.call(app); assert.deepEqual(calls.slice(-2), ['feed-destroy', 'sign-destroy']);
-  assert.match(html, /user-sign\.js\?v=20261103-sign-2/); assert.match(html, /user-sign\.css\?v=20261103-sign-2/);
+  assert.match(html, /user-sign\.js\?v=20261103-sign-3/); assert.match(html, /user-sign\.css\?v=20261103-sign-3/);
   assert.doesNotMatch(html, /class="sign-day"[^>]*@click/);
 });
 
@@ -173,9 +179,62 @@ test('actual Vue runtime observes sign pending and full personal-profile templat
   const Vue = module.exports, f = fixture(), app = new Vue({data: {signState: f.api.initial()}}); f.app = app;
   await ready(f); const changes = []; app.$watch('signState.signPending', value => changes.push(value));
   const post = f.api.sign(app); await Vue.nextTick(); f.signed(0); await tick();
-  f.calendar(2, '2026-11', [3]); await post; await Vue.nextTick(); assert.deepEqual(changes, [true, false]);
+  f.status(2, true); f.calendar(3, '2026-11', [3]); await post; await Vue.nextTick(); assert.deepEqual(changes, [true, false]);
   const html = fs.readFileSync(path.join(__dirname, '../info.html'), 'utf8');
   const template = html.slice(html.indexOf('<div id="app">'), html.indexOf('<script src='));
   const compiled = Vue.compile(template, {warn: message => warnings.push(message)});
   assert.deepEqual(warnings, []); assert.equal(typeof compiled.render, 'function'); f.api.destroy(app); app.$destroy();
+});
+
+test('post confirmation remains successful when the subsequent streak read fails', async () => {
+  const f = fixture(); await ready(f);
+  const post = f.api.sign(f.app); f.signed(0); await tick();
+  f.reads[2].reject(new Error('history Redis unavailable')); f.calendar(3, '2026-11', [3]);
+  assert.equal(await post, true);
+  assert.equal(f.app.signState.signed, true); assert.equal(f.app.signState.signError, '');
+  assert.equal(f.app.signState.continuousDays, null); assert.match(f.app.signState.statusError, /history Redis/);
+  await f.api.sign(f.app); assert.equal(f.posts.length, 1);
+  const retry = f.api.refreshStatus(f.app); f.status(4, true, '2026-11-03', 6); await tick();
+  f.calendar(5, '2026-11', [3]); await retry; assert.equal(f.app.signState.continuousDays, 6);
+});
+
+test('streak refresh hides stale values while loading and never replaces errors with zero', async () => {
+  const f = fixture(); await ready(f);
+  const first = f.api.status(f.app); f.status(2, true, '2026-11-03', 6); await first;
+  const next = f.api.status(f.app); assert.equal(f.app.signState.continuousDays, null);
+  assert.equal(f.app.signState.statusPending, true);
+  f.reads[3].reject(new Error('timeout')); await next;
+  assert.equal(f.app.signState.continuousDays, null); assert.equal(f.app.signState.signed, true);
+  assert.equal(f.app.signState.statusPending, false);
+});
+
+test('a very late pre-sign response cannot replace the refreshed streak', async () => {
+  const f = fixture(); await ready(f);
+  const old = f.api.status(f.app, true), post = f.api.sign(f.app);
+  f.signed(0); await tick(); f.status(3, true, '2026-11-03', 6); f.calendar(4, '2026-11', [3]); await post;
+  f.status(2, false); await old;
+  assert.equal(f.app.signState.signed, true); assert.equal(f.app.signState.continuousDays, 6);
+  assert.equal(f.app.signState.statusError, '');
+});
+
+test('historical calendars never change the current-day streak or its cutoff', async () => {
+  const f = fixture(); await ready(f);
+  const checked = f.api.status(f.app); f.status(2, true, '2026-11-03', 6); await checked;
+  const history = f.api.calendar(f.app, '2026-10'); f.calendar(3, '2026-10', [29, 30, 31], 31); await history;
+  assert.equal(f.app.signState.today, '2026-11-03'); assert.equal(f.app.signState.continuousDays, 6);
+  assert.equal(f.app.signState.calendar.signCount, 3);
+  assert.equal(f.reads.filter(read => read.url === '/user/sign/status').length, 2);
+});
+
+test('malformed or inconsistent streak responses are errors rather than displayed counts', async () => {
+  const f = fixture(); await ready(f);
+  for (const data of [
+    {date: '2026-11-03', signed: false}, {date: '2026-11-03', signed: true, continuousDays: 0},
+    {date: '2026-11-03', signed: false, continuousDays: 1}, {date: '2026-11-03', signed: true, continuousDays: -1},
+    {date: '2026-11-03', signed: true, continuousDays: '6'}, {date: '2026-11-03', signed: true, continuousDays: 1.5}
+  ]) {
+    const checked = f.api.status(f.app); f.reads[f.reads.length - 1].resolve({data});
+    assert.equal(await checked, false); assert.equal(f.app.signState.continuousDays, null);
+    assert.match(f.app.signState.statusError, /返回异常/);
+  }
 });

@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="./css/element.css">
   <link href="./css/main.css" rel="stylesheet">
   <link href="./css/info.css" rel="stylesheet">
-  <link href="./css/user-sign.css?v=20261103-sign-2" rel="stylesheet">
+  <link href="./css/user-sign.css?v=20261103-sign-3" rel="stylesheet">
 
   <style type="text/css">
       .el-tabs--bottom .el-tabs__item.is-bottom:nth-child(2), .el-tabs--bottom .el-tabs__item.is-top:nth-child(2), .el-tabs--top .el-tabs__item.is-bottom:nth-child(2), .el-tabs--top .el-tabs__item.is-top:nth-child(2) {
@@ -78,8 +78,16 @@
       </button>
     </div>
     <p class="sign-help">{{signState.today ? '上海日期：' + signState.today : '正在确认服务端日期…'}} · 月历仅供查看，不支持补签</p>
-    <div class="sign-error" v-if="signState.statusError || signState.signError" role="alert">
-      {{signState.signError || signState.statusError}}
+    <div class="sign-continuous" aria-live="polite">
+      <span v-if="signState.statusPending || signState.signPending">连续签到统计加载中…</span>
+      <template v-else-if="signState.continuousDays === null">
+        <span>连续签到统计暂不可用{{signState.statusError ? '：' + signState.statusError : ''}}</span>
+        <button type="button" @click="refreshSignStatus">重试统计</button>
+      </template>
+      <span v-else>连续签到{{signState.continuousDays}}天</span>
+    </div>
+    <div class="sign-error" v-if="signState.signError" role="alert">
+      {{signState.signError}}
       <button type="button" :disabled="signState.statusPending || signState.signPending" @click="refreshSignStatus">查询状态</button>
       <button type="button" v-if="signState.signError && signState.signed !== true" :disabled="signState.signPending || signState.statusPending || !signState.today" @click="signToday">重试签到</button>
     </div>
@@ -167,7 +175,7 @@
 <script src="./js/blog-links.js?v=20261103-3"></script>
 <script src="./js/blog-likes.js?v=20261030-3"></script>
 <script src="./js/feed.js?v=20261031-1"></script>
-<script src="./js/user-sign.js?v=20261103-sign-2"></script>
+<script src="./js/user-sign.js?v=20261103-sign-3"></script>
 <script src="./js/footer.js"></script>
 <script>
   const app = new Vue({

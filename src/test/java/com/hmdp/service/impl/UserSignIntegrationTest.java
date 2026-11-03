@@ -55,10 +55,10 @@ class UserSignIntegrationTest {
 
     @Test void firstRepeatStatusAndRecreatedServiceKeepTheSameRecordWithoutExpiry() {
         UserSignService service = at("2026-11-03");
-        assertEquals(new SignStatus("2026-11-03", false), service.status().getData());
+        assertEquals(new SignStatus("2026-11-03", false, 0), service.status().getData());
         assertEquals(new SignResult("2026-11-03", true, true), service.sign().getData());
         assertEquals(new SignResult("2026-11-03", true, false), service.sign().getData());
-        assertEquals(new SignStatus("2026-11-03", true), at("2026-11-03").status().getData());
+        assertEquals(new SignStatus("2026-11-03", true, 1), at("2026-11-03").status().getData());
         assertEquals(new SignCalendar("2026-11", 30, List.of(3), 1), service.calendar(null).getData());
         assertEquals(-1L, redis.getExpire(prefix + "1001:202611"));
     }
@@ -77,7 +77,7 @@ class UserSignIntegrationTest {
             assertEquals(1, winners);
             assertEquals(1, ((SignCalendar) service.calendar(null).getData()).signCount());
             user(1002); keys.add(prefix + "1002:202611");
-            assertEquals(new SignStatus("2026-11-03", false), service.status().getData());
+            assertEquals(new SignStatus("2026-11-03", false, 0), service.status().getData());
             assertEquals(new SignCalendar("2026-11", 30, List.of(), 0), service.calendar(null).getData());
             assertEquals(new SignResult("2026-11-03", true, true), service.sign().getData());
         } finally { pool.shutdownNow(); }
@@ -113,5 +113,70 @@ class UserSignIntegrationTest {
         redis.opsForHash().put(prefix + "1001:202611", "wrong", "type");
         assertFalse(service.sign().getSuccess()); assertFalse(service.status().getSuccess());
         assertFalse(service.calendar(null).getSuccess());
+    }
+
+    private void seed(String month, int first, int last) {
+        String key = prefix + "1001:" + month.replace("-", ""); keys.add(key);
+        for (int day = first; day <= last; day++) redis.opsForValue().setBit(key, day - 1, true);
+    }
+
+    @Test void todayUnsignedIsZeroAndMonthCountIsIndependentOfTrailingOnes() {
+        UserSignService service = at("2026-11-06"); seed("2026-11", 1, 2); seed("2026-11", 4, 5);
+        assertEquals(new SignStatus("2026-11-06", false, 0), service.status().getData());
+        assertTrue(service.sign().getSuccess());
+        assertEquals(new SignStatus("2026-11-06", true, 3), service.status().getData());
+        assertEquals(5, ((SignCalendar) service.calendar(null).getData()).signCount());
+    }
+
+    @Test void crossesMonthBoundaryAndRepeatedSignDoesNotAddToTheStreak() {
+        UserSignService service = at("2026-11-03"); seed("2026-10", 29, 31); seed("2026-11", 1, 3);
+        assertEquals(new SignStatus("2026-11-03", true, 6), service.status().getData());
+        assertEquals(new SignResult("2026-11-03", true, false), service.sign().getData());
+        assertEquals(new SignStatus("2026-11-03", true, 6), service.status().getData());
+        assertEquals(3, ((SignCalendar) service.calendar(null).getData()).signCount());
+    }
+
+    @Test void readsMoreThanAYearOfFullMonthsWithoutTruncation() {
+        UserSignService service = at("2026-11-03"); seed("2026-11", 1, 3);
+        YearMonth month = YearMonth.of(2026, 10);
+        for (int i = 0; i < 14; i++, month = month.minusMonths(1)) seed(month.toString(), 1, month.lengthOfMonth());
+        assertEquals(new SignStatus("2026-11-03", true, 429), service.status().getData());
+        assertFalse(Boolean.TRUE.equals(redis.hasKey(prefix + "1001:202508")));
+    }
+
+    @Test void yearBoundaryUsesThePreviousDecember() {
+        UserSignService service = at("2027-01-02"); seed("2026-12", 30, 31); seed("2027-01", 1, 2);
+        assertEquals(new SignStatus("2027-01-02", true, 4), service.status().getData());
+    }
+
+    @Test void marchFirstHandlesOrdinaryAndLeapFebruary() {
+        for (int year : new int[]{2025, 2024}) {
+            String february = year + "-02"; int days = YearMonth.parse(february).lengthOfMonth();
+            UserSignService service = at(year + "-03-01"); seed(year + "-03", 1, 1);
+            seed(february, 1, days); seed(year + "-01", 31, 31);
+            assertEquals(new SignStatus(year + "-03-01", true, year == 2024 ? 31 : 30), service.status().getData());
+        }
+    }
+
+    @Test void thirtyOneBitUnsignedReadAndAbsentPriorMonthStopCorrectly() {
+        UserSignService service = at("2026-10-31"); seed("2026-10", 1, 31);
+        assertEquals(new SignStatus("2026-10-31", true, 31), service.status().getData());
+        assertFalse(Boolean.TRUE.equals(redis.hasKey(prefix + "1001:202609")));
+    }
+
+    @Test void historicalRedisErrorIsNotMistakenForTheEndOfAStreak() {
+        UserSignService service = at("2026-11-03"); seed("2026-11", 1, 3);
+        String previous = prefix + "1001:202610"; keys.add(previous); redis.opsForHash().put(previous, "wrong", "type");
+        Result result = service.status(); assertFalse(result.getSuccess()); assertNull(result.getData());
+        assertEquals(new SignResult("2026-11-03", true, false), service.sign().getData());
+        assertTrue(Boolean.TRUE.equals(redis.opsForValue().getBit(prefix + "1001:202611", 2)));
+    }
+
+    @Test void shanghaiMidnightStatisticsUseOneCapturedDateAndContinueIntoOctober() {
+        user(1001); seed("2026-10", 29, 31); seed("2026-11", 1, 1);
+        UserSignService before = new UserSignService(redis, Clock.fixed(Instant.parse("2026-10-31T15:59:59.999999999Z"), ZoneOffset.UTC), prefix);
+        UserSignService after = new UserSignService(redis, Clock.fixed(Instant.parse("2026-10-31T16:00:00Z"), ZoneOffset.UTC), prefix);
+        assertEquals(new SignStatus("2026-10-31", true, 3), before.status().getData());
+        assertEquals(new SignStatus("2026-11-01", true, 4), after.status().getData());
     }
 }

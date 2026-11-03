@@ -1,22 +1,22 @@
-# 基础签到
+# 签到与连续签到统计
 
 ## 请求流程与文件
 
 `POST /user/sign` → 现有 RefreshTokenInterceptor / LoginInterceptor → UserController → IUserService / UserServiceImpl → UserSignService → Redis SETBIT。
 
-`GET /user/sign/status` 经同一登录链路用 GETBIT 查询今天；`GET /user/sign/calendar?month=2026-11` 用 BITFIELD 一次读取月历。没有修改 MvcConfig 的放行范围，登录和 `/user/{id}` 保留原行为。用户和签到日期只从登录上下文及后端时钟取得，客户端传入的 userId/date 不参与处理。
+`GET /user/sign/status` 经同一登录链路用 BITFIELD 查询今天与连续天数；`GET /user/sign/calendar?month=2026-11` 用 BITFIELD 一次读取月历。没有修改 MvcConfig 的放行范围，登录和 `/user/{id}` 保留原行为。用户和签到日期只从登录上下文及后端时钟取得，客户端传入的 userId/date 不参与处理。
 
 | 主要文件 | 职责 |
 | --- | --- |
 | `UserController`、`IUserService`、`UserServiceImpl` | 三个接口及服务委托 |
-| `service/impl/UserSignService.java` | 身份校验、日期、原子签到、月历解析、Redis 错误处理 |
+| `service/impl/UserSignService.java` | 身份校验、原子签到、月历、跨月连续统计及共享 Bitmap 读取校验 |
 | `config/BusinessTimeConfig.java` | 提供可注入的 signClock，固定业务时区 Asia/Shanghai |
 | `dto/SignResult.java`、`SignStatus.java`、`SignCalendar.java` | 明确响应字段 |
 | `frontend/info.html`、`frontend/js/user-sign.js`、`frontend/css/user-sign.css` | 签到、月份导航、请求状态和过期响应保护 |
 | `UserSignServiceTest`、`UserSignIntegrationTest`、`AdminAccessTest` | 日期、真实 Redis 并发、错误及登录回归 |
 | `frontend/tests/user-sign.test.cjs`、`user-sign.browser.cjs` | 前端竞态、Vue 编译、实际浏览器验收 |
 
-不增加数据库表，不修改积分或其他业务计数。不提供他人记录、补签、撤销、连续签到或奖励。
+不增加数据库表，不修改积分或其他业务计数。连续签到从原 Bitmap 推导，不另设计数器；不提供他人记录、补签、撤销或奖励。
 
 ## 核心方法与原理
 
@@ -36,11 +36,23 @@ calendar 校验严格四位年份、两位月份，拒绝空串、空白、非�
 
 例如 11 月执行 `BITFIELD sign:1001:202611 GET u30 0`。Redis offset 0 在读取整数的最高位，第 d 天从 `(bitmap >>> (30-d)) & 1` 取得；从 1 到 30 顺序解析得到 signedDays，signCount 直接取列表长度。两者来自同一份读取结果，响应内部一致。月外的位不会计入，只发出一次 Redis 月历读请求。
 
+### 连续签到
+
+status 只获取一次上海业务日期。当前月读取 `BITFIELD sign:1001:202611 GET u3 0`（假设今天为 11 月 3 日），最右一位就是今天。不能读完整个 11 月再从右侧计数，否则未来日期的 0 会干扰结果。
+
+从低位开始，遇到 1 就累计并无符号右移；遇到首个 0 停止。如果本段全部为 1，使用 YearMonth.minusMonths(1) 进入上个月，再按 lengthOfMonth 读取该月 28/29/30/31 位。这样自然支持跨月、跨年、闰年。每个所需月份只读一次，不逐日请求、不预加载全部历史，也不按最近几个月截断。
+
+例如本月 1～6 日为 `110111`，月累计为 5，末尾连续为 3；10 月 29～31 日和 11 月 1～3 日均已签，10 月 28 日未签时，返回连续 6 天。
+
+signed 与 continuousDays 来自同一份当前月读取结果。今天位为 0 就返回 false/0，不读历史；缺失历史月正常返回 [0]，保留之前累计后停止。Redis 命令失败、null、空列表、多元素、负数或超出 uN 范围的数都使整次统计失败，不返回伪造的 0 或部分天数。使用 long 解析及累计，不额外写 Redis。
+
+POST 的 SETBIT 和统计 GET 分开，重复签到只把同一位继续设为 1，因此重新计算连续天数也不会重复增加。后端 POST 不依赖统计读取成功。月际多次读不承诺人工修改/故障恢复期间的全局快照，正常接口没有补签或撤销。
+
 ### 前端状态
 
 登录 `/user/me` 成功后才初始化签到模块，今天显示服务端 date。月历星期位置使用返回月份和 UTC 计算，不用浏览器本地日期判断今天。
 
-提交中与已经签到的按钮禁用。超时后将签到状态标为待确认，保留查询状态和幂等重试入口。刷新状态可跨午夜重新取得服务端日期；长期不刷新页面时不自动声称已进入新的一天。
+提交中与已经签到的按钮禁用。写入确认后先保留已签到状态，再单独刷新连续统计和月历。统计失败只显示“连续签到统计暂不可用”和重试入口，不把签到成功显示为失败；统计加载和失败都清空旧计数，不用 0 代替未知值。只有 POST 自身超时才将签到结果标为待确认，保留查询状态和幂等重试入口。刷新状态可跨午夜重新取得服务端日期和连续天数；长期不刷新页面时不自动声称已进入新的一天。切换历史月历不改变连续统计的日期。
 
 状态、月历、提交有独立请求编号和 WeakMap 页面上下文。切月和销毁会让旧响应失效，旧 finally 不能清除新请求的 pending；签到前发出的读请求在提交时与成功时失效。历史日期仅为文本，没有补签点击行为。月历失败保留同月已显示内容，切月失败不会把另一月内容当成本月。
 
@@ -55,7 +67,7 @@ calendar 校验严格四位年份、两位月份，拒绝空串、空白、非�
 重复 POST 返回 newSign=false。GET `/user/sign/status`：
 
 ```json
-{"success":true,"data":{"date":"2026-11-03","signed":true}}
+{"success":true,"data":{"date":"2026-11-03","signed":true,"continuousDays":6}}
 ```
 
 GET `/user/sign/calendar?month=2026-11`：
@@ -70,10 +82,10 @@ GET `/user/sign/calendar?month=2026-11`：
 
 2026-11-03 实际执行：
 
-- Maven `-Dhmdp.integration=true package`：261 项测试通过，0 失败/错误/跳过，打包成功。
-- Node 全套前端测试：111 项通过，0 失败/跳过。覆盖重复点击、超时与查询/重试、切月、旧响应、销毁/重建、失败保留、上海跨月及实际 Vue 观察/模板编译。
+- Maven `-Dhmdp.integration=true package`：272 项测试通过，0 失败/错误/跳过，打包成功。针对性签到和权限测试 37 项通过；真实 Redis 覆盖连续跨 14 个完整月份共 429 天、跨年、普通二月与闰年二月、31 位、断签、历史缺失及历史读取失败。
+- Node 全套前端测试：116 项通过，0 失败/跳过。覆盖重复点击、超时与查询/重试、签到成功后统计失败、切月、旧响应、销毁/重建、失败不显示旧值或 0、上海跨月及实际 Vue 观察/模板编译。
 - 真实 Redis 随机前缀测试：36 个并发 SETBIT 只有一个 newSign=true；不同用户隔离；月初/月末、普通二月/闰年二月/31 天、午夜跨月、空记录不建 key、无 TTL、错误类型失败。测试结束仅删除自己记录的 key。
-- 实际通过 Nginx + 新后端 + 无头 Edge，浏览器设为 America/Los_Angeles：打开个人主页 → 首次签到 → 重复 POST → 刷新仍已签到 → 查看历史月历 → 返回本月；页面/脚本/样式均 HTTP 200，匿名三个接口均 401，浏览器脚本错误为 0。使用随机隔离测试身份，不写 MySQL；其登录及签到 key 在 finally 删除，并验证不存在。
+- 实际通过 Nginx + 新后端 + 无头 Edge，浏览器设为 America/Los_Angeles：打开个人主页 → 签到成功后首次统计请求模拟断网 → 仍显示已签到 → 重试统计恢复 → 重复 POST → 准备六天跨月隔离记录 → 接口返回 continuousDays=6 → 刷新页面同时显示连续 6 天/月累计 3 天 → 历史月历仍保持截至今天连续 6 天 → 返回本月。页面/脚本/样式均 HTTP 200，匿名三个接口均 401，浏览器脚本错误为 0。使用随机隔离测试身份，不写 MySQL；其登录及签到 key 在 finally 删除，并验证不存在。
 - 没有进行持久化故障恢复、进程强杀或长期负载测试；没有操作真实用户的签到记录。
 
 运行示例：
@@ -89,12 +101,12 @@ node frontend/tests/user-sign.browser.cjs
 
 浏览器验收需要本机 Redis CLI、Edge、Nginx 与已加载新接口的后端。路径可用 HMDP_REDIS_CLI、HMDP_EDGE_PATH、HMDP_SIGN_BASE_URL 覆盖；Redis CLI 支持其标准环境配置。验收脚本会创建并清理随机测试会话，不使用或输出真实用户 token。
 
-仅同步以下三个文件到 `D:\JavaCode\nginx-1.18.0\html\hmdp`：info.html、js/user-sign.js、css/user-sign.css。脚本和样式版本为 `20261103-sign-2`。原文件备份在 `D:\JavaCode\nginx-1.18.0\backups\hmdp-sign-20261103-140950`，manifest.json 记录哪些目标原先存在及其校验值。没有覆盖其他页面或公共资源。
+仅同步以下三个文件到 `D:\JavaCode\nginx-1.18.0\html\hmdp`：info.html、js/user-sign.js、css/user-sign.css。脚本和样式版本为 `20261103-sign-3`。原文件备份在 `D:\JavaCode\nginx-1.18.0\backups\hmdp-sign-streak-20261103-181922`，manifest.json 记录目标原文件校验值。基础版备份也保留；没有覆盖其他页面或公共资源。
 
-原先没有后端监听 8081，本次启动新打包的 jar，并通过实际 HTTP 与页面验证了新接口。运行日志在忽略的 target/sign-runtime.log；浏览器结果和截图分别为 target/sign-browser-result.json、target/sign-profile-browser.png。后续检查 IDE Debug 启动问题时，发现该验收进程仍占用 8081，已停止它并确认端口释放，供 IDE 调试使用。
+验收前 Redis 已运行，Nginx 8080 与后端 8081 未运行；本次启动 Nginx 和新打包的 jar，并通过实际 HTTP 与页面验证新返回字段。运行日志在忽略的 target/sign-streak-runtime.log；浏览器结果和截图分别为 target/sign-streak-browser-result.json、target/sign-streak-profile-browser.png。验收后停止本次启动的后端进程并释放 8081，供 IDE Debug 使用；Nginx 保持运行。静态资源已就绪，日常使用需在 IDE 启动最新后端。验收阶段未执行 Git 提交或推送。
 
 ## Redis 存储边界
 
-每月最多 31 位，Redis 字符串位内容最多 4 字节，另有 key 和对象开销。月记录不设置 TTL，查询和应用重启不清理历史。
+每月最多 31 位，Redis 字符串位内容最多 4 字节，另有 key 和对象开销。月记录不设置 TTL，查询和应用重启不清理历史。连续统计的 Redis 请求次数随所跨越月份数增长，没有人为截断；特别长的连续记录会增加查询耗时，超时明确失败而非返回部分统计。
 
 Redis 是本期唯一签到存储，未双写 MySQL。无 TTL 不等于绝对不丢数据：Redis 数据丢失、人工删除、持久化失败或故障恢复到旧快照都会影响记录。本机核对到 appendonly=no，RDB save 为 `900 1 300 10 60 10000`，maxmemory-policy=noeviction；最近尚未进入快照的数据可能丢失，内存不足会拒绝写入。本次不修改 Redis 持久化配置。需要更强保障时应另行确定 AOF、备份恢复和存储可靠性要求。

@@ -43,10 +43,11 @@ class UserSignServiceTest {
     }
 
     @Test void readsOnlyCurrentUserAndServerDate() {
-        when(values.getBit("sign:1001:202611", 2)).thenReturn(false, true);
-        assertEquals(new SignStatus("2026-11-03", false), service.status().getData());
-        assertEquals(new SignStatus("2026-11-03", true), service.status().getData());
-        verify(values, times(2)).getBit("sign:1001:202611", 2);
+        when(values.bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class))).thenReturn(List.of(0L), List.of(1L));
+        assertEquals(new SignStatus("2026-11-03", false, 0), service.status().getData());
+        assertEquals(new SignStatus("2026-11-03", true, 1), service.status().getData());
+        verify(values, times(2)).bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class));
+        verify(values, never()).getBit(anyString(), anyLong());
     }
 
     @Test void monthIsStrictAndFutureMonthsNeverReachRedis() {
@@ -70,14 +71,12 @@ class UserSignServiceTest {
         assertFalse(service.sign().getSuccess());
         when(values.setBit(anyString(), anyLong(), eq(true))).thenThrow(new DataAccessResourceFailureException("test"));
         assertFalse(service.sign().getSuccess());
-        when(values.getBit(anyString(), anyLong())).thenReturn(null);
-        assertFalse(service.status().getSuccess());
-        when(values.getBit(anyString(), anyLong())).thenThrow(new DataAccessResourceFailureException("test"));
-        assertFalse(service.status().getSuccess());
-        when(values.bitField(anyString(), any(BitFieldSubCommands.class))).thenReturn(null, List.of(), Arrays.asList((Long) null), List.of(-1L));
-        for (int i = 0; i < 4; i++) assertFalse(service.calendar(null).getSuccess());
+        for (List<Long> reply : Arrays.asList(null, List.<Long>of(), Arrays.asList((Long) null), List.of(-1L), List.of(0L, 1L), List.of(1L << 31))) {
+            when(values.bitField(anyString(), any(BitFieldSubCommands.class))).thenReturn(reply);
+            assertFalse(service.status().getSuccess()); assertFalse(service.calendar(null).getSuccess());
+        }
         when(values.bitField(anyString(), any(BitFieldSubCommands.class))).thenThrow(new DataAccessResourceFailureException("test"));
-        assertFalse(service.calendar(null).getSuccess());
+        assertFalse(service.status().getSuccess()); assertFalse(service.calendar(null).getSuccess());
     }
 
     @Test void anonymousServiceCallsCannotAccessRedis() {
@@ -98,9 +97,39 @@ class UserSignServiceTest {
         when(values.setBit("sign:1001:202610", 30, true)).thenReturn(false);
         assertEquals(new SignResult("2026-10-31", true, true), boundary.sign().getData());
         assertEquals(1, reads.get());
-        reads.set(0); when(values.getBit("sign:1001:202610", 30)).thenReturn(false);
-        assertEquals(new SignStatus("2026-10-31", false), boundary.status().getData()); assertEquals(1, reads.get());
+        reads.set(0); when(values.bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class))).thenReturn(List.of(0L));
+        assertEquals(new SignStatus("2026-10-31", false, 0), boundary.status().getData()); assertEquals(1, reads.get());
         reads.set(0); when(values.bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class))).thenReturn(List.of(0L));
         assertEquals("2026-10", ((SignCalendar) boundary.calendar(null).getData()).month()); assertEquals(1, reads.get());
+    }
+
+    @Test void stopsAtFirstZeroAndOnlyReadsOneBitmapPerNeededMonth() {
+        when(values.bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class))).thenReturn(List.of(7L));
+        when(values.bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class))).thenReturn(List.of(7L));
+        assertEquals(new SignStatus("2026-11-03", true, 6), service.status().getData());
+        verify(values).bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class));
+        verify(values).bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class));
+        verifyNoMoreInteractions(values);
+    }
+
+    @Test void todayUnsignedStopsWithoutReadingHistory() {
+        when(values.bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class))).thenReturn(List.of(6L));
+        assertEquals(new SignStatus("2026-11-03", false, 0), service.status().getData());
+        verify(values).bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class));
+        verifyNoMoreInteractions(values);
+    }
+
+    @Test void failedOrAmbiguousHistoryNeverReturnsPartialStreak() {
+        when(values.bitField(eq("sign:1001:202611"), any(BitFieldSubCommands.class))).thenReturn(List.of(7L));
+        for (List<Long> reply : Arrays.asList(null, List.<Long>of(), Arrays.asList((Long) null), List.of(0L, 1L), List.of(-1L), List.of(1L << 31))) {
+            when(values.bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class))).thenReturn(reply);
+            Result result = service.status(); assertFalse(result.getSuccess()); assertNull(result.getData());
+        }
+        when(values.bitField(eq("sign:1001:202610"), any(BitFieldSubCommands.class)))
+                .thenThrow(new DataAccessResourceFailureException("test history failure"));
+        assertFalse(service.status().getSuccess());
+        // 状态统计失败不影响原子写入接口自身的成功语义。
+        when(values.setBit("sign:1001:202611", 2, true)).thenReturn(true);
+        assertEquals(new SignResult("2026-11-03", true, false), service.sign().getData());
     }
 }

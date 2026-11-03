@@ -6,7 +6,7 @@
   const datePattern = /^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}$/;
 
   function initial() {
-    return {today: '', signed: null, statusPending: false, statusError: '', signPending: false,
+    return {today: '', signed: null, continuousDays: null, statusPending: false, statusError: '', signPending: false,
       signError: '', month: '', calendar: null, calendarPending: false, calendarError: ''};
   }
   function errorText(error) { return (error && error.message) || String(error || '请求失败，请重试'); }
@@ -14,20 +14,25 @@
   function invalidateReads(state, value) {
     value.status++; value.calendar++;
     state.statusPending = false; state.calendarPending = false;
+    state.continuousDays = null;
   }
-  function applyStatus(state, data) {
+  function applyStatus(state, data, withContinuous = true) {
     if (!data || !datePattern.test(data.date) || typeof data.signed !== 'boolean') throw new Error('签到状态返回异常');
-    if (state.today && data.date < state.today) return;
+    if (state.today && data.date < state.today) throw new Error('签到统计结果已过期，请重试');
     const sameDay = state.today === data.date;
+    if (withContinuous && (!Number.isSafeInteger(data.continuousDays) || data.continuousDays < 0
+        || (data.signed ? data.continuousDays < 1 : data.continuousDays !== 0)
+        || (sameDay && state.signed === true && !data.signed))) throw new Error('签到状态或连续统计返回异常，请重试');
     state.signed = sameDay && state.signed === true ? true : data.signed;
     state.today = data.date;
+    state.continuousDays = withContinuous ? data.continuousDays : null;
   }
   async function status(vm, force = false) {
     const value = contexts.get(vm); if (!value) return false;
     const state = vm.signState;
     if ((state.statusPending && !force) || state.signPending) return false;
     const request = ++value.status, active = () => live(vm, value) && value.status === request;
-    state.statusPending = true; state.statusError = '';
+    state.statusPending = true; state.statusError = ''; state.continuousDays = null;
     try {
       const {data} = await axios.get('/user/sign/status', {headers: {'Cache-Control': 'no-cache'}});
       if (!active()) return false;
@@ -74,17 +79,15 @@
     const previousMonth = state.today.slice(0, 7), followCurrent = !state.month || state.month === previousMonth;
     invalidateReads(state, value);
     state.signPending = true; state.signError = '';
+    let confirmed;
     try {
       const {data} = await axios.post('/user/sign');
       if (!active()) return false;
       if (!data || data.signed !== true || typeof data.newSign !== 'boolean') throw new Error('签到结果尚未确认');
-      applyStatus(state, data);
+      applyStatus(state, data, false);
+      confirmed = data;
       invalidateReads(state, value);
       state.statusError = '';
-      // 签到期间用户可能已切到历史月份，不能将其切回本月。
-      const stillCurrent = followCurrent && (!state.month || state.month === previousMonth);
-      await calendar(vm, stillCurrent ? data.date.slice(0, 7) : state.month, true);
-      return true;
     } catch (error) {
       if (active()) {
         invalidateReads(state, value);
@@ -93,6 +96,11 @@
       }
       return false;
     } finally { if (active()) state.signPending = false; }
+    if (!active()) return false;
+    // 写入确认后单独刷新读模型；统计失败由 status 自己处理，绝不能进入签到失败分支。
+    const stillCurrent = followCurrent && (!state.month || state.month === previousMonth);
+    await Promise.all([status(vm, true), calendar(vm, stillCurrent ? confirmed.date.slice(0, 7) : state.month, true)]);
+    return true;
   }
   async function refreshStatus(vm) {
     const value = contexts.get(vm);

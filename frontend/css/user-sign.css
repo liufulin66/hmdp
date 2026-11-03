@@ -7,6 +7,7 @@
 .sign-month-controls { margin-top: 12px; flex-wrap: wrap; }
 .sign-month-controls input { width: 125px; padding: 5px; border: 1px solid #ddd; border-radius: 4px; font: inherit; }
 .sign-summary, .sign-help { margin: 10px 0; font-size: 13px; color: #666; }
+.sign-continuous { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; padding: 8px; border-radius: 5px; background: #fff7f1; font-size: 13px; color: #b4451d; }
 .sign-help { font-size: 12px; }
 .sign-error { font-size: 13px; color: #b4451d; margin: 8px 0; }
 .sign-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; }
